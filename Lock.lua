@@ -1,321 +1,444 @@
+print("[TLC] Iniciando script...")
+
+local UIS = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
-local playerGui = localPlayer:WaitForChild("PlayerGui")
-local Camera = Workspace.CurrentCamera
+local mouse = localPlayer:GetMouse()
 
--- ==================== VARIABLES ====================
-local targetLock = false
-local lockedPlayer = nil
-local buttonVisible = true
-local buttonSize = 55
-local isDraggable = true
-local menuOpen = true
+if not localPlayer or not mouse then
+    warn("[TLC] No hay LocalPlayer o mouse")
+    return
+end
 
--- ==================== GUI PRINCIPAL ====================
+local playerGui = localPlayer:FindFirstChild("PlayerGui") or localPlayer:WaitForChild("PlayerGui", 15)
+if not playerGui then
+    warn("[TLC] No hay PlayerGui")
+    return
+end
+
+print("[TLC] Servicios OK, creando GUI...")
+
+local config = {
+    targetLock = false,
+    lockedPlayer = nil,
+    buttonSize = 50,
+    dragLocked = false,
+    buttonVisible = false,
+    maxCenterDistance = 0,
+    showCenterDot = true
+}
+
+local CAMERA_LOCK_NAME = "TLC_Mobile"
+
+local old = playerGui:FindFirstChild("TLC_Mobile_GUI")
+if old then old:Destroy() end
+pcall(function() RunService:UnbindFromRenderStep(CAMERA_LOCK_NAME) end)
+
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "MobileCameraLock"
+screenGui.Name = "TLC_Mobile_GUI"
 screenGui.ResetOnSpawn = false
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = 999999
 screenGui.Parent = playerGui
 
--- ========== MENÚ DE CONFIGURACIÓN ==========
-local menuFrame = Instance.new("Frame")
-menuFrame.Name = "Menu"
-menuFrame.Size = UDim2.new(0, 170, 0, 210)
-menuFrame.Position = UDim2.new(0.03, 0, 0.25, 0)
-menuFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
-menuFrame.BorderSizePixel = 0
-menuFrame.Parent = screenGui
+local centerDot = Instance.new("Frame")
+centerDot.Size = UDim2.new(0, 8, 0, 8)
+centerDot.Position = UDim2.new(0.5, -4, 0.5, -4)
+centerDot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+centerDot.BackgroundTransparency = 0.2
+centerDot.BorderSizePixel = 0
+centerDot.InputTransparent = true
+centerDot.Visible = config.showCenterDot
+centerDot.Parent = screenGui
+
+local menu = Instance.new("Frame")
+menu.Size = UDim2.new(0, 210, 0, 270)
+menu.Position = UDim2.new(0.02, 0, 0.25, 0)
+menu.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+menu.BorderSizePixel = 0
+menu.Active = true
+menu.Visible = true
+menu.Parent = screenGui
 
 local menuCorner = Instance.new("UICorner")
-menuCorner.CornerRadius = UDim.new(0, 12)
-menuCorner.Parent = menuFrame
+menuCorner.CornerRadius = UDim.new(0, 10)
+menuCorner.Parent = menu
 
-local menuStroke = Instance.new("UIStroke")
-menuStroke.Color = Color3.fromRGB(55, 55, 65)
-menuStroke.Thickness = 1.2
-menuStroke.Parent = menuFrame
-
--- Título
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -40, 0, 28)
-title.Position = UDim2.new(0, 10, 0, 6)
+title.Size = UDim2.new(1, -36, 0, 28)
+title.Position = UDim2.new(0, 8, 0, 4)
 title.BackgroundTransparency = 1
-title.Text = "Camera Lock"
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextSize = 15
+title.Text = "Camera Lock Centro"
+title.TextColor3 = Color3.fromRGB(130, 180, 255)
+title.TextSize = 13
 title.Font = Enum.Font.GothamBold
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = menuFrame
+title.Parent = menu
 
--- Botón minimizar menú
-local minMenuBtn = Instance.new("TextButton")
-minMenuBtn.Size = UDim2.new(0, 26, 0, 26)
-minMenuBtn.Position = UDim2.new(1, -32, 0, 6)
-minMenuBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-minMenuBtn.Text = "–"
-minMenuBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-minMenuBtn.TextSize = 18
-minMenuBtn.Font = Enum.Font.GothamBold
-minMenuBtn.BorderSizePixel = 0
-minMenuBtn.Parent = menuFrame
+local minBtn = Instance.new("TextButton")
+minBtn.Size = UDim2.new(0, 26, 0, 26)
+minBtn.Position = UDim2.new(1, -30, 0, 5)
+minBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 70)
+minBtn.Text = "-"
+minBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minBtn.TextSize = 20
+minBtn.Font = Enum.Font.GothamBold
+minBtn.BorderSizePixel = 0
+minBtn.Parent = menu
 
-local minMenuCorner = Instance.new("UICorner")
-minMenuCorner.CornerRadius = UDim.new(0, 6)
-minMenuCorner.Parent = minMenuBtn
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -16, 0, 20)
+statusLabel.Position = UDim2.new(0, 8, 0, 34)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Lock: OFF | Nadie"
+statusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+statusLabel.TextSize = 11
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = menu
 
--- Toggle mostrar botón
-local showBtn = Instance.new("TextButton")
-showBtn.Size = UDim2.new(1, -20, 0, 32)
-showBtn.Position = UDim2.new(0, 10, 0, 42)
-showBtn.BackgroundColor3 = Color3.fromRGB(45, 160, 70)
-showBtn.Text = "Botón: Visible"
-showBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-showBtn.TextSize = 13
-showBtn.Font = Enum.Font.GothamBold
-showBtn.BorderSizePixel = 0
-showBtn.Parent = menuFrame
-
-local showBtnCorner = Instance.new("UICorner")
-showBtnCorner.CornerRadius = UDim.new(0, 8)
-showBtnCorner.Parent = showBtn
-
--- Tamaño del botón
-local sizeLabel = Instance.new("TextLabel")
-sizeLabel.Size = UDim2.new(1, -20, 0, 20)
-sizeLabel.Position = UDim2.new(0, 10, 0, 82)
-sizeLabel.BackgroundTransparency = 1
-sizeLabel.Text = "Tamaño: 55"
-sizeLabel.TextColor3 = Color3.fromRGB(210, 210, 210)
-sizeLabel.TextSize = 12
-sizeLabel.Font = Enum.Font.Gotham
-sizeLabel.TextXAlignment = Enum.TextXAlignment.Left
-sizeLabel.Parent = menuFrame
-
-local sizeMinus = Instance.new("TextButton")
-sizeMinus.Size = UDim2.new(0, 40, 0, 28)
-sizeMinus.Position = UDim2.new(0, 10, 0, 105)
-sizeMinus.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-sizeMinus.Text = "-"
-sizeMinus.TextColor3 = Color3.fromRGB(255, 255, 255)
-sizeMinus.TextSize = 16
-sizeMinus.Font = Enum.Font.GothamBold
-sizeMinus.BorderSizePixel = 0
-sizeMinus.Parent = menuFrame
-
-local sizePlus = Instance.new("TextButton")
-sizePlus.Size = UDim2.new(0, 40, 0, 28)
-sizePlus.Position = UDim2.new(0, 56, 0, 105)
-sizePlus.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-sizePlus.Text = "+"
-sizePlus.TextColor3 = Color3.fromRGB(255, 255, 255)
-sizePlus.TextSize = 16
-sizePlus.Font = Enum.Font.GothamBold
-sizePlus.BorderSizePixel = 0
-sizePlus.Parent = menuFrame
-
-local sizeMinusCorner = Instance.new("UICorner")
-sizeMinusCorner.CornerRadius = UDim.new(0, 6)
-sizeMinusCorner.Parent = sizeMinus
-local sizePlusCorner = Instance.new("UICorner")
-sizePlusCorner.CornerRadius = UDim.new(0, 6)
-sizePlusCorner.Parent = sizePlus
-
--- Arrastrable
-local dragBtn = Instance.new("TextButton")
-dragBtn.Size = UDim2.new(1, -20, 0, 32)
-dragBtn.Position = UDim2.new(0, 10, 0, 145)
-dragBtn.BackgroundColor3 = Color3.fromRGB(45, 160, 70)
-dragBtn.Text = "Arrastrable: Sí"
-dragBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-dragBtn.TextSize = 13
-dragBtn.Font = Enum.Font.GothamBold
-dragBtn.BorderSizePixel = 0
-dragBtn.Parent = menuFrame
-
-local dragBtnCorner = Instance.new("UICorner")
-dragBtnCorner.CornerRadius = UDim.new(0, 8)
-dragBtnCorner.Parent = dragBtn
-
--- ========== BOTÓN DE LOCK ==========
-local lockButton = Instance.new("TextButton")
-lockButton.Name = "LockButton"
-lockButton.Size = UDim2.new(0, buttonSize, 0, buttonSize)
-lockButton.Position = UDim2.new(0.75, 0, 0.65, 0)
-lockButton.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
-lockButton.Text = "LOCK"
-lockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-lockButton.TextSize = 14
-lockButton.Font = Enum.Font.GothamBold
-lockButton.BorderSizePixel = 0
-lockButton.Parent = screenGui
-
-local lockCorner = Instance.new("UICorner")
-lockCorner.CornerRadius = UDim.new(1, 0)
-lockCorner.Parent = lockButton
-
-local lockStroke = Instance.new("UIStroke")
-lockStroke.Color = Color3.fromRGB(0, 0, 0)
-lockStroke.Thickness = 1.5
-lockStroke.Transparency = 0.3
-lockStroke.Parent = lockButton
-
--- Botón minimizado del menú
-local miniMenuBtn = Instance.new("TextButton")
-miniMenuBtn.Size = UDim2.new(0, 46, 0, 46)
-miniMenuBtn.Position = UDim2.new(0.03, 0, 0.25, 0)
-miniMenuBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-miniMenuBtn.Text = "CL"
-miniMenuBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-miniMenuBtn.TextSize = 14
-miniMenuBtn.Font = Enum.Font.GothamBold
-miniMenuBtn.BorderSizePixel = 0
-miniMenuBtn.Visible = false
-miniMenuBtn.Parent = screenGui
-
-local miniMenuCorner = Instance.new("UICorner")
-miniMenuCorner.CornerRadius = UDim.new(1, 0)
-miniMenuCorner.Parent = miniMenuBtn
-
--- ==================== ARRASTRE ====================
-local function makeDraggable(gui, condition)
-	local dragging = false
-	local dragStart, startPos
-
-	gui.InputBegan:Connect(function(input)
-		if not condition() then return end
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = gui.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
-			end)
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and condition() and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			local delta = input.Position - dragStart
-			gui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-		end
-	end)
+local function createMenuButton(name, text, yPos, color)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Size = UDim2.new(1, -16, 0, 30)
+    btn.Position = UDim2.new(0, 8, 0, yPos)
+    btn.BackgroundColor3 = color
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamBold
+    btn.BorderSizePixel = 0
+    btn.Parent = menu
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 7)
+    c.Parent = btn
+    return btn
 end
 
-makeDraggable(menuFrame, function() return true end)
-makeDraggable(miniMenuBtn, function() return true end)
-makeDraggable(lockButton, function() return isDraggable end)
+local genBtn = createMenuButton("GenBtn", "Generar boton flotante", 58, Color3.fromRGB(50, 150, 80))
+local blockBtn = createMenuButton("BlockBtn", "Arrastre: LIBRE", 92, Color3.fromRGB(130, 100, 40))
+local centerBtn = createMenuButton("CenterBtn", "Punto central: ON", 126, Color3.fromRGB(50, 120, 160))
 
--- ==================== LÓGICA DEL LOCK ====================
-local function getClosestPlayer()
-	local closestPlayer = nil
-	local shortestDistance = math.huge
-	local screenCenter = Camera.ViewportSize / 2
+local sizeLbl = Instance.new("TextLabel")
+sizeLbl.Size = UDim2.new(1, -16, 0, 18)
+sizeLbl.Position = UDim2.new(0, 8, 0, 160)
+sizeLbl.BackgroundTransparency = 1
+sizeLbl.Text = "Tamano boton:"
+sizeLbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+sizeLbl.TextSize = 11
+sizeLbl.Font = Enum.Font.Gotham
+sizeLbl.TextXAlignment = Enum.TextXAlignment.Left
+sizeLbl.Parent = menu
 
-	for _, player in pairs(Players:GetPlayers()) do
-		if player \~= localPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-			local torso = player.Character.HumanoidRootPart
-			local screenPos, onScreen = Camera:WorldToViewportPoint(torso.Position)
+local szMinus = Instance.new("TextButton")
+szMinus.Size = UDim2.new(0, 40, 0, 28)
+szMinus.Position = UDim2.new(0, 8, 0, 180)
+szMinus.BackgroundColor3 = Color3.fromRGB(140, 50, 50)
+szMinus.Text = "-5"
+szMinus.TextColor3 = Color3.fromRGB(255, 255, 255)
+szMinus.TextSize = 12
+szMinus.Font = Enum.Font.GothamBold
+szMinus.BorderSizePixel = 0
+szMinus.Parent = menu
 
-			if onScreen and screenPos.Z > 0 then
-				local distance = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
-				if distance < shortestDistance then
-					shortestDistance = distance
-					closestPlayer = player
-				end
-			end
-		end
-	end
-	return closestPlayer
+local szVal = Instance.new("TextLabel")
+szVal.Size = UDim2.new(0, 50, 0, 28)
+szVal.Position = UDim2.new(0, 56, 0, 180)
+szVal.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+szVal.Text = "50px"
+szVal.TextColor3 = Color3.fromRGB(255, 255, 120)
+szVal.TextSize = 12
+szVal.Font = Enum.Font.GothamBold
+szVal.BorderSizePixel = 0
+szVal.Parent = menu
+
+local szPlus = Instance.new("TextButton")
+szPlus.Size = UDim2.new(0, 40, 0, 28)
+szPlus.Position = UDim2.new(0, 114, 0, 180)
+szPlus.BackgroundColor3 = Color3.fromRGB(50, 140, 50)
+szPlus.Text = "+5"
+szPlus.TextColor3 = Color3.fromRGB(255, 255, 255)
+szPlus.TextSize = 12
+szPlus.Font = Enum.Font.GothamBold
+szPlus.BorderSizePixel = 0
+szPlus.Parent = menu
+
+local info = Instance.new("TextLabel")
+info.Size = UDim2.new(1, -16, 0, 40)
+info.Position = UDim2.new(0, 8, 0, 214)
+info.BackgroundTransparency = 1
+info.Text = "C = lock/unlock\nBoton flotante = toggle lock"
+info.TextColor3 = Color3.fromRGB(110, 110, 120)
+info.TextSize = 10
+info.Font = Enum.Font.Gotham
+info.TextXAlignment = Enum.TextXAlignment.Left
+info.TextYAlignment = Enum.TextYAlignment.Top
+info.TextWrapped = true
+info.Parent = menu
+
+local floatBtn = Instance.new("TextButton")
+floatBtn.Size = UDim2.new(0, config.buttonSize, 0, config.buttonSize)
+floatBtn.Position = UDim2.new(0.8, 0, 0.4, 0)
+floatBtn.BackgroundColor3 = Color3.fromRGB(70, 130, 220)
+floatBtn.Text = "LOCK"
+floatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+floatBtn.TextSize = 12
+floatBtn.Font = Enum.Font.GothamBold
+floatBtn.BorderSizePixel = 0
+floatBtn.Visible = false
+floatBtn.Active = true
+floatBtn.Parent = screenGui
+
+local floatCorner = Instance.new("UICorner")
+floatCorner.CornerRadius = UDim.new(1, 0)
+floatCorner.Parent = floatBtn
+
+local restoreBtn = Instance.new("TextButton")
+restoreBtn.Size = UDim2.new(0, 32, 0, 32)
+restoreBtn.Position = UDim2.new(0.02, 0, 0.25, 0)
+restoreBtn.BackgroundColor3 = Color3.fromRGB(70, 130, 220)
+restoreBtn.Text = "CL"
+restoreBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+restoreBtn.TextSize = 11
+restoreBtn.Font = Enum.Font.GothamBold
+restoreBtn.BorderSizePixel = 0
+restoreBtn.Visible = false
+restoreBtn.Active = true
+restoreBtn.Parent = screenGui
+
+print("[TLC] GUI creada, configurando arrastre...")
+
+local function makeDraggable(obj, canDragFn)
+    local dragging = false
+    local startTouchPos = nil
+    local startPos = nil
+
+    obj.InputBegan:Connect(function(input)
+        if canDragFn and not canDragFn() then return end
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            startTouchPos = input.Position
+            startPos = obj.Position
+        end
+    end)
+
+    obj.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+            startTouchPos = nil
+        end
+    end)
+
+    obj.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if canDragFn and not canDragFn() then return end
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
+            if startTouchPos then
+                local delta = input.Position - startTouchPos
+                obj.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end
+    end)
 end
 
-local function updateLock()
-	if lockedPlayer and lockedPlayer.Character then
-		local torso = lockedPlayer.Character:FindFirstChild("HumanoidRootPart")
-		if torso then
-			Camera.CFrame = CFrame.new(Camera.CFrame.Position, torso.Position)
-		end
-	end
+makeDraggable(menu, function() return true end)
+makeDraggable(restoreBtn, function() return true end)
+makeDraggable(floatBtn, function() return not config.dragLocked end)
+
+local function getCamera()
+    return workspace.CurrentCamera
 end
 
--- ==================== BOTONES ====================
-lockButton.MouseButton1Click:Connect(function()
-	if not targetLock then
-		local closest = getClosestPlayer()
-		if closest and closest.Character then
-			lockedPlayer = closest
-			targetLock = true
-			lockButton.BackgroundColor3 = Color3.fromRGB(45, 170, 70)
-			lockButton.Text = "ON"
-		end
-	else
-		lockedPlayer = nil
-		targetLock = false
-		lockButton.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
-		lockButton.Text = "LOCK"
-	end
+local function isAlive(plr)
+    if not plr then return false, nil end
+    local char = plr.Character
+    if not char then return false, nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return false, nil end
+    return true, root
+end
+
+local function getClosestToCenter()
+    local cam = getCamera()
+    if not cam then return nil end
+    local vp = cam.ViewportSize
+    if not vp or vp.X <= 0 then return nil end
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local best, bestDist = nil, math.huge
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= localPlayer then
+            local alive, root = isAlive(plr)
+            if alive then
+                local offset = root.Position - cam.CFrame.Position
+                if offset:Dot(cam.CFrame.LookVector) > 0 then
+                    local sp = cam:WorldToViewportPoint(root.Position)
+                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    local ok = config.maxCenterDistance <= 0 or d <= config.maxCenterDistance
+                    if ok and d < bestDist then
+                        bestDist = d
+                        best = plr
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function updateVisuals()
+    local lt = config.targetLock and "ON" or "OFF"
+    local tn = config.lockedPlayer and config.lockedPlayer.Name or "Nadie"
+    statusLabel.Text = "Lock: " .. lt .. " | " .. tn
+    statusLabel.TextColor3 = config.targetLock and Color3.fromRGB(110, 255, 130) or Color3.fromRGB(255, 120, 120)
+
+    szVal.Text = tostring(config.buttonSize) .. "px"
+
+    blockBtn.Text = config.dragLocked and "Arrastre: BLOQUEADO" or "Arrastre: LIBRE"
+    blockBtn.BackgroundColor3 = config.dragLocked and Color3.fromRGB(170, 50, 50) or Color3.fromRGB(130, 100, 40)
+
+    genBtn.Text = config.buttonVisible and "Destruir boton" or "Generar boton"
+    genBtn.BackgroundColor3 = config.buttonVisible and Color3.fromRGB(170, 60, 60) or Color3.fromRGB(50, 150, 80)
+
+    centerBtn.Text = config.showCenterDot and "Punto central: ON" or "Punto central: OFF"
+    centerBtn.BackgroundColor3 = config.showCenterDot and Color3.fromRGB(50, 120, 160) or Color3.fromRGB(80, 80, 95)
+
+    centerDot.Visible = config.showCenterDot
+
+    floatBtn.Size = UDim2.new(0, config.buttonSize, 0, config.buttonSize)
+    local ts = math.floor(config.buttonSize * 0.28)
+    if ts < 10 then ts = 10 end
+    if ts > 35 then ts = 35 end
+    floatBtn.TextSize = ts
+    floatBtn.BackgroundColor3 = config.targetLock and Color3.fromRGB(40, 180, 80) or Color3.fromRGB(70, 130, 220)
+end
+
+local function stopLock()
+    pcall(function() RunService:UnbindFromRenderStep(CAMERA_LOCK_NAME) end)
+end
+
+local function doCameraLock()
+    if not config.targetLock or not config.lockedPlayer then return end
+    local cam = getCamera()
+    if not cam then return end
+    local alive, root = isAlive(config.lockedPlayer)
+    if not alive then
+        config.targetLock = false
+        config.lockedPlayer = nil
+        mouse.TargetFilter = nil
+        stopLock()
+        updateVisuals()
+        return
+    end
+    cam.CFrame = CFrame.new(cam.CFrame.Position, root.Position)
+end
+
+local function startLock()
+    stopLock()
+    RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, doCameraLock)
+end
+
+local function setLock(state)
+    if state then
+        local la = isAlive(localPlayer)
+        if not la then
+            config.targetLock = false
+            config.lockedPlayer = nil
+            mouse.TargetFilter = nil
+            stopLock()
+            updateVisuals()
+            return
+        end
+        local best = getClosestToCenter()
+        if best then
+            local ta, tr = isAlive(best)
+            if ta then
+                config.targetLock = true
+                config.lockedPlayer = best
+                mouse.TargetFilter = tr
+                startLock()
+            else
+                config.targetLock = false
+                config.lockedPlayer = nil
+                mouse.TargetFilter = nil
+                stopLock()
+            end
+        else
+            config.targetLock = false
+            config.lockedPlayer = nil
+            mouse.TargetFilter = nil
+            stopLock()
+        end
+    else
+        config.targetLock = false
+        config.lockedPlayer = nil
+        mouse.TargetFilter = nil
+        stopLock()
+    end
+    updateVisuals()
+end
+
+minBtn.MouseButton1Click:Connect(function()
+    menu.Visible = false
+    restoreBtn.Visible = true
+    restoreBtn.Position = menu.Position
 end)
 
-showBtn.MouseButton1Click:Connect(function()
-	buttonVisible = not buttonVisible
-	lockButton.Visible = buttonVisible
-	if buttonVisible then
-		showBtn.Text = "Botón: Visible"
-		showBtn.BackgroundColor3 = Color3.fromRGB(45, 160, 70)
-	else
-		showBtn.Text = "Botón: Oculto"
-		showBtn.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
-	end
+restoreBtn.MouseButton1Click:Connect(function()
+    restoreBtn.Visible = false
+    menu.Visible = true
+    menu.Position = restoreBtn.Position
 end)
 
-sizeMinus.MouseButton1Click:Connect(function()
-	buttonSize = math.max(35, buttonSize - 5)
-	lockButton.Size = UDim2.new(0, buttonSize, 0, buttonSize)
-	sizeLabel.Text = "Tamaño: " .. buttonSize
+genBtn.MouseButton1Click:Connect(function()
+    config.buttonVisible = not config.buttonVisible
+    floatBtn.Visible = config.buttonVisible
+    if config.buttonVisible then floatBtn.Position = UDim2.new(0.8, 0, 0.4, 0) end
+    updateVisuals()
 end)
 
-sizePlus.MouseButton1Click:Connect(function()
-	buttonSize = math.min(90, buttonSize + 5)
-	lockButton.Size = UDim2.new(0, buttonSize, 0, buttonSize)
-	sizeLabel.Text = "Tamaño: " .. buttonSize
+szMinus.MouseButton1Click:Connect(function()
+    config.buttonSize = math.max(20, config.buttonSize - 5)
+    updateVisuals()
 end)
 
-dragBtn.MouseButton1Click:Connect(function()
-	isDraggable = not isDraggable
-	if isDraggable then
-		dragBtn.Text = "Arrastrable: Sí"
-		dragBtn.BackgroundColor3 = Color3.fromRGB(45, 160, 70)
-	else
-		dragBtn.Text = "Arrastrable: No"
-		dragBtn.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
-	end
+szPlus.MouseButton1Click:Connect(function()
+    config.buttonSize = math.min(130, config.buttonSize + 5)
+    updateVisuals()
 end)
 
-minMenuBtn.MouseButton1Click:Connect(function()
-	menuOpen = false
-	menuFrame.Visible = false
-	miniMenuBtn.Visible = true
-	miniMenuBtn.Position = menuFrame.Position
+blockBtn.MouseButton1Click:Connect(function()
+    config.dragLocked = not config.dragLocked
+    updateVisuals()
 end)
 
-miniMenuBtn.MouseButton1Click:Connect(function()
-	menuOpen = true
-	miniMenuBtn.Visible = false
-	menuFrame.Visible = true
-	menuFrame.Position = miniMenuBtn.Position
+centerBtn.MouseButton1Click:Connect(function()
+    config.showCenterDot = not config.showCenterDot
+    updateVisuals()
 end)
 
--- ==================== LOOP ====================
-RunService.RenderStepped:Connect(function()
-	if targetLock then
-		updateLock()
-	end
+floatBtn.MouseButton1Click:Connect(function()
+    setLock(not config.targetLock)
 end)
 
-print("Mobile Camera Lock cargado")
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.C then
+        setLock(not config.targetLock)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if config.lockedPlayer == p then setLock(false) end
+end)
+
+localPlayer.CharacterAdded:Connect(function()
+    task.wait(0.3)
+    if config.targetLock then setLock(false) end
+end)
+
+updateVisuals()
+print("[TLC] Camera Lock Centro Mobile cargado OK")
