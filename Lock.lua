@@ -1221,7 +1221,6 @@ local function cameraLockStep(dt)
     -- CÁMARA DIRECTA: CFrame puro, CERO Lerp, CERO smooth, CERO exponential
     Camera.CFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
 end
-end
 
 RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
 
