@@ -1198,26 +1198,27 @@ local function cameraLockStep(dt)
     local aimPosition = targetPos
     
     -- PREDICT MILIMÉTRICO (Solo si está activado)
-    if config.predictEnabled then
-        local dtt = math.max(lastDeltaTime, 0.001)
-        local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
-        vel = Vector3.new(vel.X, 0, vel.Z)
+if config.predictEnabled then
+    local vel = root.AssemblyLinearVelocity or Vector3.new(0,0,0)
+    vel = Vector3.new(vel.X, 0, vel.Z)
+    
+    -- Zona muerta REAL: si se mueve menos de 3 studs/s, NO predecir
+    if vel.Magnitude < 3 then
+        aimPosition = targetPos
+    else
+        -- Clamp de velocidad máxima para evitar overshoot en dashes
+        if vel.Magnitude > 80 then vel = vel.Unit * 80 end
         
-        if vel.Magnitude < 1 and lastTargetPos then
-            local delta = targetPos - lastTargetPos
-            vel = Vector3.new(delta.X, 0, delta.Z) / dtt
-        end
+        -- Lead puro: velocidad × tiempo exacto
+        local lead = vel * PREDICT_TIME
         
-        if vel.Magnitude > 150 then vel = vel.Unit * 150 end
+        -- Tope dinámico basado en distancia (cerca = menos lead, lejos = más)
+        local dist = (targetPos - Camera.CFrame.Position).Magnitude
+        local maxLead = math.clamp(dist * 0.3, 2, 12)
+        if lead.Magnitude > maxLead then lead = lead.Unit * maxLead end
         
-        -- Suavizado mínimo para evitar temblor (NO es smooth de cámara)
-        smoothedVelocity = smoothedVelocity:Lerp(vel, 0.6)
-        
-        if smoothedVelocity.Magnitude >= 1.5 then
-            local lead = smoothedVelocity * PREDICT_TIME
-            if lead.Magnitude > 15 then lead = lead.Unit * 15 end
-            aimPosition = targetPos + lead
-        end
+        aimPosition = targetPos + lead
+    end
     end
     
     lastTargetPos = targetPos
