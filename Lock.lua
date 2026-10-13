@@ -1166,15 +1166,14 @@ end
 
 lockButton.MouseButton1Click:Connect(toggleLock)
 
--- ============================================
--- LOOP DE CÁMARA (PREDICT MILIMÉTRICO + SNAP DIRECTO)
--- ============================================
-local lastDeltaTime = 1/60
+-- LOOP CAMERA LOCK (CEREBRO PURO: CERO SUAVIZADO, CERO LERP)
 
+local lastDeltaTime = 1/60
 local function cameraLockStep(dt)
     lastDeltaTime = dt or (1/60)
     if not targetLock or not lockedPlayer or not lockedPlayer.Character then return end
     
+    -- Respetar listas
     if inList(whitelist, lockedPlayer.Name) then resetLock() return end
     if #blacklist > 0 and not inList(blacklist, lockedPlayer.Name) then
         local b = getClosestPlayer()
@@ -1188,8 +1187,9 @@ local function cameraLockStep(dt)
     local hum = lockedPlayer.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then resetLock() return end
     
+    -- Parte a apuntar
     local aimPart = root
-    if config.lockPart == "head" then
+    if lockPart == "head" then
         local head = lockedPlayer.Character:FindFirstChild("Head")
         if head then aimPart = head end
     end
@@ -1197,41 +1197,30 @@ local function cameraLockStep(dt)
     local targetPos = aimPart.Position
     local aimPosition = targetPos
     
-    -- PREDICT MILIMÉTRICO (Solo si está activado)
-if config.predictEnabled then
-    local vel = root.AssemblyLinearVelocity or Vector3.new(0,0,0)
-    vel = Vector3.new(vel.X, 0, vel.Z)
-    
-    -- Zona muerta REAL: si se mueve menos de 3 studs/s, NO predecir
-    if vel.Magnitude < 3 then
-        aimPosition = targetPos
-    else
-        -- Clamp de velocidad máxima para evitar overshoot en dashes
-        if vel.Magnitude > 80 then vel = vel.Unit * 80 end
+    -- PREDICT PURO: velocidad real × tiempo exacto, SIN NINGÚN FILTRO
+    if predictEnabled then
+        local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
+        vel = Vector3.new(vel.X, 0, vel.Z) -- Solo horizontal
         
-        -- Lead puro: velocidad × tiempo exacto
-        local lead = vel * PREDICT_TIME
+        -- Clamp de velocidad absurda (anti-glitch), nada más
+        if vel.Magnitude > 150 then vel = vel.Unit * 150 end
         
-        -- Tope dinámico basado en distancia (cerca = menos lead, lejos = más)
-        local dist = (targetPos - Camera.CFrame.Position).Magnitude
-        local maxLead = math.clamp(dist * 0.3, 2, 12)
-        if lead.Magnitude > maxLead then lead = lead.Unit * maxLead end
-        
-        aimPosition = targetPos + lead
-    end
+        -- Lead directo: velocidad × predictAmount (tu valor milimétrico)
+        if vel.Magnitude >= 2 then
+            local lead = vel * predictAmount
+            -- Tope dinámico según distancia para no overshootear de cerca
+            local dist = (targetPos - Camera.CFrame.Position).Magnitude
+            local maxLead = math.clamp(dist * 0.4, 3, 15)
+            if lead.Magnitude > maxLead then lead = lead.Unit * maxLead end
+            aimPosition = targetPos + lead
+        end
     end
     
     lastTargetPos = targetPos
     
-    -- CÁMARA DIRECTA (Cerebro Auto Lock: Cero LERP, cero smooth falso)
-    local targetCFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
-    
-    if config.smoothMode then
-        local exponential = 1 - math.exp(-config.smoothAmount * 60 * dt)
-        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, math.clamp(exponential, 0.01, 1))
-    else
-        Camera.CFrame = targetCFrame
-    end
+    -- CÁMARA DIRECTA: CFrame puro, CERO Lerp, CERO smooth, CERO exponential
+    Camera.CFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
+end
 end
 
 RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
