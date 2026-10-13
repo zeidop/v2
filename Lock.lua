@@ -263,7 +263,7 @@ contentArea.BackgroundTransparency = 1
 contentArea.Parent = menuFrame
 
 -- ============================================
--- PÁGINA LOCK (CEREBRO AUTO LOCK + PREDICT MILIMÉTRICO)
+-- PÁGINA LOCK
 -- ============================================
 local lockPage = Instance.new("Frame")
 lockPage.Size = UDim2.new(1, 0, 1, 0)
@@ -321,13 +321,11 @@ local sizeLabel = smallLabel("Tamano: " .. config.buttonSize, 30)
 local sizeMinus = smallBtn("-", 110, 28, 28)
 local sizePlus = smallBtn("+", 142, 28, 28)
 
--- Predict Milimétrico
 local predictLabel = smallLabel(string.format("Predict: %.3fs", config.predictAmount), 58, Color3.fromRGB(255, 220, 130))
 local predictMinus = smallBtn("-0.001", 80, 56, 28)
 local predictPlus = smallBtn("+0.001", 112, 56, 28)
 local predictToggle = smallBtn(config.predictEnabled and "ON" or "OFF", 144, 56, 28, config.predictEnabled and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50))
 
--- Direct 3D (Cerebro Auto Lock)
 local dist3DBtn = halfBtn("Direct 3D: " .. (config.useDistance3D and "ON" or "OFF"), 86, false, config.useDistance3D and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50))
 local transBtn = halfBtn("Transp: " .. math.floor(config.menuTransparency * 100) .. "%", 86, true, Color3.fromRGB(45, 45, 60))
 
@@ -345,7 +343,7 @@ local partBtn = halfBtn("Parte: " .. (config.lockPart == "head" and "Cabeza" or 
 local keyBtn = halfBtn("Tecla: " .. lockKey.Name, 132, true, Color3.fromRGB(70, 130, 220))
 
 -- ============================================
--- PÁGINA STUN (COMPLETA)
+-- PÁGINA STUN
 -- ============================================
 local noStunPage = Instance.new("Frame")
 noStunPage.Size = UDim2.new(1, 0, 1, 0)
@@ -451,7 +449,7 @@ nsInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
 nsInfoLabel.Parent = noStunPage
 
 -- ============================================
--- PÁGINA DASH (MULTIPLICADOR + INSTANT DASH)
+-- PÁGINA DASH
 -- ============================================
 local dashPage = Instance.new("Frame")
 dashPage.Size = UDim2.new(1, 0, 1, 0)
@@ -542,7 +540,7 @@ dashDesc.TextWrapped = true
 dashDesc.Parent = dashPage
 
 -- ============================================
--- PÁGINA LISTA (WHITELIST/BLACKLIST + IMAN/LUNGE)
+-- PÁGINA LISTA
 -- ============================================
 local listPage = Instance.new("Frame")
 listPage.Size = UDim2.new(1, 0, 1, 0)
@@ -1029,9 +1027,18 @@ makeDraggable(pickerGui, function() return true end)
 -- ============================================
 -- FUNCIONES ANTI-STUN Y DASH
 -- ============================================
-local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-local humanoid = character:FindFirstChildOfClass("Humanoid")
-local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+-- CORRECCIÓN CRÍTICA: Usar task.spawn para NO bloquear el hilo principal
+-- Esto evita que la pantalla de carga se quede pegada si el personaje tarda en aparecer
+local character = nil
+local humanoid = nil
+local rootPart = nil
+
+task.spawn(function()
+    local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+    character = char
+    humanoid = char:FindFirstChildOfClass("Humanoid")
+    rootPart = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+end)
 
 local function jump()
     if not humanoid or not rootPart or not jumping then return end
@@ -1065,7 +1072,7 @@ local function hookDash()
     root.ChildAdded:Connect(function(child)
         if not config.dashEnabled then return end
         if child:IsA("BodyVelocity") or child:IsA("LinearVelocity") then
-            wait()
+            task.wait()
             pcall(function()
                 if child:IsA("BodyVelocity") then
                     child.Velocity = child.Velocity * config.dashMultiplier
@@ -1097,7 +1104,6 @@ local function getClosestPlayer()
         return nil
     end
     
-    -- Prioridad Blacklist
     if #blacklist > 0 then
         local best, bestDist = nil, math.huge
         for _, name in ipairs(blacklist) do
@@ -1113,7 +1119,6 @@ local function getClosestPlayer()
         if best then return best end
     end
     
-    -- Buscar más cercano
     local closestPlayer = nil
     local shortestDistance = math.huge
     for _, player in pairs(Players:GetPlayers()) do
@@ -1166,14 +1171,15 @@ end
 
 lockButton.MouseButton1Click:Connect(toggleLock)
 
--- LOOP CAMERA LOCK (CEREBRO PURO: CERO SUAVIZADO, CERO LERP)
-
+-- ============================================
+-- LOOP DE CÁMARA (PREDICT MILIMÉTRICO COMPLETO + SNAP DIRECTO)
+-- ============================================
 local lastDeltaTime = 1/60
+
 local function cameraLockStep(dt)
     lastDeltaTime = dt or (1/60)
     if not targetLock or not lockedPlayer or not lockedPlayer.Character then return end
     
-    -- Respetar listas
     if inList(whitelist, lockedPlayer.Name) then resetLock() return end
     if #blacklist > 0 and not inList(blacklist, lockedPlayer.Name) then
         local b = getClosestPlayer()
@@ -1187,9 +1193,8 @@ local function cameraLockStep(dt)
     local hum = lockedPlayer.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then resetLock() return end
     
-    -- Parte a apuntar
     local aimPart = root
-    if lockPart == "head" then
+    if config.lockPart == "head" then
         local head = lockedPlayer.Character:FindFirstChild("Head")
         if head then aimPart = head end
     end
@@ -1197,29 +1202,52 @@ local function cameraLockStep(dt)
     local targetPos = aimPart.Position
     local aimPosition = targetPos
     
-    -- PREDICT PURO: velocidad real × tiempo exacto, SIN NINGÚN FILTRO
-    if predictEnabled then
-        local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
-        vel = Vector3.new(vel.X, 0, vel.Z) -- Solo horizontal
+    -- PREDICT MILIMÉTRICO COMPLETO (Con fallback y tope dinámico)
+    if config.predictEnabled then
+        local dtt = math.max(lastDeltaTime, 0.001)
         
-        -- Clamp de velocidad absurda (anti-glitch), nada más
+        -- 1. Velocidad física real
+        local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
+        vel = Vector3.new(vel.X, 0, vel.Z)
+        
+        -- 2. Fallback: Si la física dice 0 pero se mueve (tween/CFrame)
+        if vel.Magnitude < 1 and lastTargetPos then
+            local delta = targetPos - lastTargetPos
+            vel = Vector3.new(delta.X, 0, delta.Z) / dtt
+        end
+        
+        -- 3. Clamp anti-glitch
         if vel.Magnitude > 150 then vel = vel.Unit * 150 end
         
-        -- Lead directo: velocidad × predictAmount (tu valor milimétrico)
-        if vel.Magnitude >= 2 then
-            local lead = vel * predictAmount
-            -- Tope dinámico según distancia para no overshootear de cerca
-            local dist = (targetPos - Camera.CFrame.Position).Magnitude
-            local maxLead = math.clamp(dist * 0.4, 3, 15)
-            if lead.Magnitude > maxLead then lead = lead.Unit * maxLead end
+        -- 4. Suavizado mínimo de velocidad (NO es smooth de cámara)
+        smoothedVelocity = smoothedVelocity:Lerp(vel, 0.6)
+        
+        -- 5. Calcular lead
+        if smoothedVelocity.Magnitude >= 1.5 then
+            local lead = smoothedVelocity * PREDICT_TIME
+            
+            -- 6. Tope DINÁMICO según distancia (cerca = menos lead, lejos = más)
+            local distToTarget = (Camera.CFrame.Position - targetPos).Magnitude
+            local dynamicMax = math.clamp(distToTarget * 0.5, 6, 16)
+            if lead.Magnitude > dynamicMax then 
+                lead = lead.Unit * dynamicMax 
+            end
+            
             aimPosition = targetPos + lead
         end
     end
     
     lastTargetPos = targetPos
     
-    -- CÁMARA DIRECTA: CFrame puro, CERO Lerp, CERO smooth, CERO exponential
-    Camera.CFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
+    -- CÁMARA DIRECTA (Cero LERP de cámara)
+    local targetCFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
+    
+    if config.smoothMode then
+        local exponential = 1 - math.exp(-config.smoothAmount * 60 * dt)
+        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, math.clamp(exponential, 0.01, 1))
+    else
+        Camera.CFrame = targetCFrame
+    end
 end
 
 RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
@@ -1256,7 +1284,6 @@ sizePlus.MouseButton1Click:Connect(function()
     saveConfig()
 end)
 
--- PREDICT MILIMÉTRICO (0.001 en 0.001)
 predictMinus.MouseButton1Click:Connect(function()
     config.predictAmount = math.max(0, config.predictAmount - 0.001)
     config.predictAmount = math.floor(config.predictAmount * 1000 + 0.5) / 1000
@@ -1511,15 +1538,15 @@ localPlayer.CharacterAdded:Connect(function(c)
     rootPart = c:WaitForChild("HumanoidRootPart", 3) or c:FindFirstChild("Torso")
     jumping = true
     instantDashLastVel = Vector3.new(0, 0, 0)
-    wait(0.5)
+    task.wait(0.5)
     if targetLock then resetLock() end
     hookDash()
 end)
 
 if localPlayer.Character then hookDash() end
 
--- Mostrar menú
-delay(2, function()
+-- Mostrar menú (CORREGIDO: usa task.delay en vez de delay global)
+task.delay(2, function()
     if loadGui and loadGui.Parent then loadGui:Destroy() end
     menuFrame.Visible = true
 end)
@@ -1529,9 +1556,9 @@ updateNsToggle()
 updateListCounts()
 
 -- Autoguardado
-spawn(function()
+task.spawn(function()
     while true do
-        wait(5)
+        task.wait(5)
         saveConfig()
     end
 end)
@@ -1539,22 +1566,24 @@ end)
 print("Zeidop Hub cargado OK - LOCK + INSTANT DASH + STUN + DASH + LISTA")
 
 -- FIX SCROLL DEL SELECTOR
-local pg2 = Players.LocalPlayer:WaitForChild("PlayerGui")
-local hub2 = pg2:FindFirstChild("ZeidopHub")
-local picker2 = hub2 and hub2:FindFirstChild("ZeidopPicker")
-if picker2 then
-    local scroll2 = picker2:FindFirstChildOfClass("ScrollingFrame")
-    if scroll2 then
-        pcall(function()
-            scroll2.AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y
-        end)
-        local layout2 = scroll2:FindFirstChildOfClass("UIListLayout")
-        if layout2 then
-            local function fit()
-                scroll2.CanvasSize = UDim2.new(0, 0, 0, layout2.AbsoluteContentSize.Y + 8)
+task.spawn(function()
+    local pg2 = Players.LocalPlayer:WaitForChild("PlayerGui")
+    local hub2 = pg2:FindFirstChild("ZeidopHub")
+    local picker2 = hub2 and hub2:FindFirstChild("ZeidopPicker")
+    if picker2 then
+        local scroll2 = picker2:FindFirstChildOfClass("ScrollingFrame")
+        if scroll2 then
+            pcall(function()
+                scroll2.AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y
+            end)
+            local layout2 = scroll2:FindFirstChildOfClass("UIListLayout")
+            if layout2 then
+                local function fit()
+                    scroll2.CanvasSize = UDim2.new(0, 0, 0, layout2.AbsoluteContentSize.Y + 8)
+                end
+                fit()
+                layout2:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(fit)
             end
-            fit()
-            layout2:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(fit)
         end
     end
-end
+end)
