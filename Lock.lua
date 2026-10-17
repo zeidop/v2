@@ -1685,6 +1685,273 @@ do
         if math.abs(a) < 1e-4 then
             if b < 0 then t = -cc / b end
         else
+-- ============================================
+-- DASH ASSIST (valores ajustables desde el menú)
+-- ============================================
+do
+    -- Cargar valores guardados del archivo
+    pcall(function()
+        if readfile and isfile and isfile(SAVE_FILE) then
+            local d = HttpService:JSONDecode(readfile(SAVE_FILE))
+            if type(d) == "table" then
+                if type(d.assistMaxT) == "number" then config.assistMaxT = d.assistMaxT end
+                if type(d.assistAngle) == "number" then config.assistAngle = d.assistAngle end
+                if type(d.assistStopDist) == "number" then config.assistStopDist = d.assistStopDist end
+                if type(d.assistSpikeOn) == "number" then config.assistSpikeOn = d.assistSpikeOn end
+                if type(d.assistSpikeOff) == "number" then config.assistSpikeOff = d.assistSpikeOff end
+                if type(d.assistWindow) == "number" then config.assistWindow = d.assistWindow end
+            end
+        end
+    end)
+
+    -- Defaults si no hay nada guardado
+    if config.assistMaxT == nil then config.assistMaxT = 0.44 end
+    if config.assistAngle == nil then config.assistAngle = 50 end
+    if config.assistStopDist == nil then config.assistStopDist = 3 end
+    if config.assistSpikeOn == nil then config.assistSpikeOn = 50 end
+    if config.assistSpikeOff == nil then config.assistSpikeOff = 35 end
+    if config.assistWindow == nil then config.assistWindow = 0.35 end
+    if config.dashAssist == nil then config.dashAssist = true end
+
+    -- Variables activas (la lógica lee estas)
+    local MAX_T = config.assistMaxT
+    local STEER_MAX_ANGLE = math.rad(config.assistAngle)
+    local STOP_DIST = config.assistStopDist
+    local SPIKE_ON = config.assistSpikeOn
+    local SPIKE_OFF = config.assistSpikeOff
+    local WINDOW = config.assistWindow
+
+    -- Botón ON/OFF (más corto para dejar espacio al ⚙)
+    local assistBtn = Instance.new("TextButton")
+    assistBtn.Size = UDim2.new(0, 150, 0, 24)
+    assistBtn.Position = UDim2.new(0, 5, 0, 190)
+    assistBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    assistBtn.TextSize = 11
+    assistBtn.Font = Enum.Font.GothamBold
+    assistBtn.BorderSizePixel = 0
+    assistBtn.Parent = dashPage
+    Instance.new("UICorner", assistBtn).CornerRadius = UDim.new(0, 6)
+
+    -- Botón ⚙ para abrir configuración
+    local assistCfgBtn = Instance.new("TextButton")
+    assistCfgBtn.Size = UDim2.new(0, 34, 0, 24)
+    assistCfgBtn.Position = UDim2.new(0, 159, 0, 190)
+    assistCfgBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    assistCfgBtn.Text = "⚙"
+    assistCfgBtn.TextColor3 = Color3.fromRGB(160, 120, 255)
+    assistCfgBtn.TextSize = 14
+    assistCfgBtn.Font = Enum.Font.GothamBold
+    assistCfgBtn.BorderSizePixel = 0
+    assistCfgBtn.Parent = dashPage
+    Instance.new("UICorner", assistCfgBtn).CornerRadius = UDim.new(0, 6)
+
+    local function refreshAssistBtn()
+        assistBtn.Text = "DASH ASSIST: " .. (config.dashAssist and "ON" or "OFF")
+        assistBtn.BackgroundColor3 = config.dashAssist and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    end
+    refreshAssistBtn()
+
+    assistBtn.MouseButton1Click:Connect(function()
+        config.dashAssist = not config.dashAssist
+        refreshAssistBtn()
+        saveConfig()
+    end)
+
+    -- ============================================
+    -- POPUP DE CONFIGURACIÓN
+    -- ============================================
+    local cfgGui = Instance.new("Frame")
+    cfgGui.Name = "AssistCfgPanel"
+    cfgGui.Size = UDim2.new(0, 190, 0, 210)
+    cfgGui.Position = UDim2.new(0.5, -95, 0.5, -105)
+    cfgGui.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    cfgGui.BorderSizePixel = 0
+    cfgGui.Active = true
+    cfgGui.Visible = false
+    cfgGui.ZIndex = 50
+    cfgGui.Parent = screenGui
+    Instance.new("UICorner", cfgGui).CornerRadius = UDim.new(0, 10)
+
+    local cfgStroke = Instance.new("UIStroke")
+    cfgStroke.Color = Color3.fromRGB(160, 120, 255)
+    cfgStroke.Thickness = 1.5
+    cfgStroke.Parent = cfgGui
+
+    local cfgTitle = Instance.new("TextLabel")
+    cfgTitle.Size = UDim2.new(1, -30, 0, 22)
+    cfgTitle.Position = UDim2.new(0, 8, 0, 4)
+    cfgTitle.BackgroundTransparency = 1
+    cfgTitle.Text = "ASSIST CONFIG"
+    cfgTitle.TextColor3 = Color3.fromRGB(160, 120, 255)
+    cfgTitle.TextSize = 11
+    cfgTitle.Font = Enum.Font.GothamBold
+    cfgTitle.TextXAlignment = Enum.TextXAlignment.Left
+    cfgTitle.Parent = cfgGui
+
+    local cfgClose = Instance.new("TextButton")
+    cfgClose.Size = UDim2.new(0, 22, 0, 22)
+    cfgClose.Position = UDim2.new(1, -26, 0, 4)
+    cfgClose.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
+    cfgClose.Text = "X"
+    cfgClose.TextColor3 = Color3.fromRGB(255, 255, 255)
+    cfgClose.TextSize = 12
+    cfgClose.Font = Enum.Font.GothamBold
+    cfgClose.BorderSizePixel = 0
+    cfgClose.Parent = cfgGui
+    Instance.new("UICorner", cfgClose).CornerRadius = UDim.new(0, 5)
+
+    -- Helper para redondear al paso
+    local function roundStep(v, step)
+        return math.floor(v / step + 0.5) * step
+    end
+
+    -- Helper para crear filas de ajuste
+    local cfgY = 30
+    local function makeCfgRow(name, getVal, setVal, step, min, max, fmt)
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(0, 92, 0, 20)
+        label.Position = UDim2.new(0, 8, 0, cfgY + 2)
+        label.BackgroundTransparency = 1
+        label.Text = name .. ": " .. fmt(getVal())
+        label.TextColor3 = Color3.fromRGB(200, 200, 210)
+        label.TextSize = 9
+        label.Font = Enum.Font.GothamBold
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = cfgGui
+
+        local minus = Instance.new("TextButton")
+        minus.Size = UDim2.new(0, 28, 0, 20)
+        minus.Position = UDim2.new(0, 104, 0, cfgY)
+        minus.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+        minus.Text = "-"
+        minus.TextColor3 = Color3.fromRGB(255, 255, 255)
+        minus.TextSize = 12
+        minus.Font = Enum.Font.GothamBold
+        minus.BorderSizePixel = 0
+        minus.Parent = cfgGui
+        Instance.new("UICorner", minus).CornerRadius = UDim.new(0, 4)
+
+        local plus = Instance.new("TextButton")
+        plus.Size = UDim2.new(0, 28, 0, 20)
+        plus.Position = UDim2.new(0, 136, 0, cfgY)
+        plus.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+        plus.Text = "+"
+        plus.TextColor3 = Color3.fromRGB(255, 255, 255)
+        plus.TextSize = 12
+        plus.Font = Enum.Font.GothamBold
+        plus.BorderSizePixel = 0
+        plus.Parent = cfgGui
+        Instance.new("UICorner", plus).CornerRadius = UDim.new(0, 4)
+
+        local function update()
+            label.Text = name .. ": " .. fmt(getVal())
+        end
+
+        minus.MouseButton1Click:Connect(function()
+            local v = roundStep(getVal() - step, step)
+            if v < min then v = min end
+            setVal(v)
+            update()
+            saveConfig()
+        end)
+
+        plus.MouseButton1Click:Connect(function()
+            local v = roundStep(getVal() + step, step)
+            if v > max then v = max end
+            setVal(v)
+            update()
+            saveConfig()
+        end)
+
+        cfgY = cfgY + 26
+    end
+
+    -- Filas de ajuste
+    makeCfgRow("Tiempo", function() return MAX_T end,
+        function(v) MAX_T = v; config.assistMaxT = v end,
+        0.01, 0.10, 1.50, function(v) return string.format("%.2f", v) end)
+
+    makeCfgRow("Ángulo", function() return config.assistAngle end,
+        function(v) config.assistAngle = v; STEER_MAX_ANGLE = math.rad(v) end,
+        5, 10, 90, function(v) return string.format("%d°", v) end)
+
+    makeCfgRow("Freno", function() return STOP_DIST end,
+        function(v) STOP_DIST = v; config.assistStopDist = v end,
+        1, 1, 10, function(v) return string.format("%d", v) end)
+
+    makeCfgRow("Spike ON", function() return SPIKE_ON end,
+        function(v) SPIKE_ON = v; config.assistSpikeOn = v end,
+        5, 20, 120, function(v) return string.format("%d", v) end)
+
+    makeCfgRow("Spike OFF", function() return SPIKE_OFF end,
+        function(v) SPIKE_OFF = v; config.assistSpikeOff = v end,
+        5, 10, 100, function(v) return string.format("%d", v) end)
+
+    makeCfgRow("Ventana", function() return WINDOW end,
+        function(v) WINDOW = v; config.assistWindow = v end,
+        0.05, 0.10, 1.00, function(v) return string.format("%.2f", v) end)
+
+    -- Abrir/cerrar popup
+    assistCfgBtn.MouseButton1Click:Connect(function()
+        cfgGui.Visible = not cfgGui.Visible
+    end)
+    cfgClose.MouseButton1Click:Connect(function()
+        cfgGui.Visible = false
+    end)
+
+    -- Hacer popup arrastrable
+    makeDraggable(cfgGui, function() return true end)
+
+    -- ============================================
+    -- LÓGICA DEL DASH ASSIST
+    -- ============================================
+    local active = false
+    local driver = nil
+    local origDir = nil
+    local untilT = 0
+    local lastH = 0
+
+    local function usable(c)
+        if c:IsA("BodyVelocity") then return true end
+        if c:IsA("LinearVelocity") then
+            local ok, rel = pcall(function() return c.RelativeTo end)
+            return ok and rel == Enum.ActuatorRelativeTo.World
+        end
+        return false
+    end
+
+    local function getVel(c) return c:IsA("BodyVelocity") and c.Velocity or c.VectorVelocity end
+    local function setVel(c, v)
+        if c:IsA("BodyVelocity") then c.Velocity = v else c.VectorVelocity = v end
+    end
+
+    local function findDriver(hrp)
+        for _, c in ipairs(hrp:GetChildren()) do
+            if usable(c) then return c end
+        end
+        return nil
+    end
+
+    local function getTargetRoot()
+        if not targetLock or not lockedPlayer then return nil end
+        local ch = lockedPlayer.Character
+        local r = ch and ch:FindFirstChild("HumanoidRootPart")
+        local h = ch and ch:FindFirstChildOfClass("Humanoid")
+        if r and h and h.Health > 0 then return r end
+        return nil
+    end
+
+    local function interceptDir(myPos, tRoot, speed)
+        local r = Vector3.new(tRoot.Position.X - myPos.X, 0, tRoot.Position.Z - myPos.Z)
+        local tv = tRoot.AssemblyLinearVelocity
+        local v = Vector3.new(tv.X, 0, tv.Z)
+        local a = v:Dot(v) - speed * speed
+        local b = 2 * r:Dot(v)
+        local cc = r:Dot(r)
+        local t = nil
+        if math.abs(a) < 1e-4 then
+            if b < 0 then t = -cc / b end
+        else
             local disc = b * b - 4 * a * cc
             if disc >= 0 then
                 local sq = math.sqrt(disc)
@@ -1723,13 +1990,10 @@ do
         local cur = (driver and driver.Parent) and getVel(driver) or hrp.AssemblyLinearVelocity
         local speedH = Vector3.new(cur.X, 0, cur.Z).Magnitude
         if speedH < 10 then return end
-
         local toT = Vector3.new(tRoot.Position.X - hrp.Position.X, 0, tRoot.Position.Z - hrp.Position.Z)
         if toT.Magnitude < STOP_DIST then return end
-
         local ang = math.acos(math.clamp(origDir:Dot(toT.Unit), -1, 1))
         if ang > STEER_MAX_ANGLE then return end
-
         local dir = interceptDir(hrp.Position, tRoot, speedH)
         if not dir then return end
         local nv = Vector3.new(dir.X * speedH, cur.Y, dir.Z * speedH)
@@ -1752,6 +2016,7 @@ do
             if child.Parent and getTargetRoot() then startAssist(hrp, child) end
         end)
     end
+
     if localPlayer.Character then task.spawn(hookChar, localPlayer.Character) end
     localPlayer.CharacterAdded:Connect(function(c)
         active = false
@@ -1764,10 +2029,8 @@ do
         local char = localPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-
         local v = hrp.AssemblyLinearVelocity
         local h = Vector3.new(v.X, 0, v.Z).Magnitude
-
         if not active then
             if h > SPIKE_ON and lastH < SPIKE_OFF and getTargetRoot() then
                 startAssist(hrp, findDriver(hrp))
@@ -1782,4 +2045,4 @@ do
         end
         lastH = h
     end)
-end
+            end
