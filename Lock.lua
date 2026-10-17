@@ -19,9 +19,9 @@ local config = {
     jumpPower = 50, dashForce = 60, jumpBtnSize = 62, dashBtnSize = 62,
     dashMultiplier = 1.5, dashEnabled = true, instantDash = false,
     antiStun = false, dashAssist = true,
-    -- NUEVOS VALORES PARA EL DASH ASSIST
     assistAngle = 50, assistMaxT = 0.44, assistStopDist = 3,
-    assistSpikeOn = 50, assistSpikeOff = 35, assistWindow = 0.35,
+    assistSpikeOn = 50, assistSpikeOff = 35, assistWindow = 0.35, assistLag = 0.06,
+    aboveView = false, aboveHeight = 12,
     lockBtnXScale = 0.75, lockBtnXOffset = 0,
     lockBtnYScale = 0.65, lockBtnYOffset = 0
 }
@@ -345,6 +345,9 @@ aimSep.Parent = lockPage
 
 local partBtn = halfBtn("Parte: " .. (config.lockPart == "head" and "Cabeza" or "Torso"), 132, false, config.lockPart == "head" and Color3.fromRGB(160, 50, 50) or Color3.fromRGB(70, 130, 220))
 local keyBtn = halfBtn("Tecla: " .. lockKey.Name, 132, true, Color3.fromRGB(70, 130, 220))
+
+local aboveBtn = halfBtn("Above: " .. (config.aboveView and "ON" or "OFF"), 162, false, config.aboveView and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50))
+local aboveHeightBtn = halfBtn("Altura: " .. config.aboveHeight, 162, true, Color3.fromRGB(70, 130, 220))
 
 -- ============================================
 -- PÁGINA STUN
@@ -1031,6 +1034,8 @@ makeDraggable(pickerGui, function() return true end)
 -- ============================================
 -- FUNCIONES ANTI-STUN Y DASH
 -- ============================================
+-- CORRECCIÓN CRÍTICA: Usar task.spawn para NO bloquear el hilo principal
+-- Esto evita que la pantalla de carga se quede pegada si el personaje tarda en aparecer
 local character = nil
 local humanoid = nil
 local rootPart = nil
@@ -1174,71 +1179,95 @@ end
 lockButton.MouseButton1Click:Connect(toggleLock)
 
 -- ============================================
--- LOOP DE CÁMARA (PREDICT MILIMÉTRICO + SNAP DIRECTO)
+-- LOOP DE CÁMARA (SIN SUAVIZADO / SIN INTERPOLACIÓN)
 -- ============================================
 local lastDeltaTime = 1/60
+local MAX_LEAD_RATIO = 0.15 -- tope angular del lead (0.15 ≈ 8.5°). Sube si pierdes M1s, baja si fallas habilidades anchas
 
 local function cameraLockStep(dt)
     lastDeltaTime = dt or (1/60)
     if not targetLock or not lockedPlayer or not lockedPlayer.Character then return end
-    
+
     if inList(whitelist, lockedPlayer.Name) then resetLock() return end
     if #blacklist > 0 and not inList(blacklist, lockedPlayer.Name) then
         local b = getClosestPlayer()
         if b then lockedPlayer = b else resetLock() return end
     end
-    
+
     Camera = workspace.CurrentCamera
     if not Camera then return end
-    
+
     local root = lockedPlayer.Character:FindFirstChild("HumanoidRootPart")
     local hum = lockedPlayer.Character:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then resetLock() return end
-    
+
     local aimPart = root
     if config.lockPart == "head" then
         local head = lockedPlayer.Character:FindFirstChild("Head")
         if head then aimPart = head end
     end
-    
+
     local targetPos = aimPart.Position
     local aimPosition = targetPos
-    
+
     if config.predictEnabled then
         local dtt = math.max(lastDeltaTime, 0.001)
+
+        -- 1. Velocidad física real (horizontal)
         local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
         vel = Vector3.new(vel.X, 0, vel.Z)
-        
+
+        -- 2. Fallback: si la física dice 0 pero se mueve (tween/CFrame)
         if vel.Magnitude < 1 and lastTargetPos then
             local delta = targetPos - lastTargetPos
             vel = Vector3.new(delta.X, 0, delta.Z) / dtt
         end
-        
+
+        -- 3. Clamp anti-glitch
         if vel.Magnitude > 150 then vel = vel.Unit * 150 end
-        
-        smoothedVelocity = smoothedVelocity:Lerp(vel, 0.6)
-        
-        if smoothedVelocity.Magnitude >= 1.5 then
-            local lead = smoothedVelocity * PREDICT_TIME
-            local distToTarget = (Camera.CFrame.Position - targetPos).Magnitude
-            local dynamicMax = math.clamp(distToTarget * 0.5, 6, 16)
-            if lead.Magnitude > dynamicMax then lead = lead.Unit * dynamicMax end
-            aimPosition = targetPos + lead
+
+        -- 4. SIN interpolación: velocidad cruda de este frame
+        smoothedVelocity = vel
+
+        -- 5. Lead solo en el componente lateral + tope angular duro
+        if vel.Magnitude >= 1.5 then
+            local toTarget = targetPos - Camera.CFrame.Position
+            local dist = toTarget.Magnitude
+            if dist > 0.1 then
+                local dir = toTarget.Unit
+                local velPerp = vel - dir * vel:Dot(dir)
+                local lead = velPerp * PREDICT_TIME
+
+                local maxLead = math.min(dist * MAX_LEAD_RATIO, 16)
+                if lead.Magnitude > maxLead then
+                    lead = lead.Unit * maxLead
+                end
+
+                aimPosition = targetPos + lead
+            end
         end
     end
-    
+
     lastTargetPos = targetPos
-    
-    local targetCFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
-    if config.smoothMode then
-        local exponential = 1 - math.exp(-config.smoothAmount * 60 * dt)
-        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, math.clamp(exponential, 0.01, 1))
-    else
-        Camera.CFrame = targetCFrame
+
+    -- Vista "Above": solo sube la posición de la cámara (altura absoluta sobre tu personaje,
+    -- sin acumularse) y solo si el objetivo está en la blacklist. No toca el apuntado ni el lead.
+    local camPos = Camera.CFrame.Position
+    if config.aboveView and #blacklist > 0 and inList(blacklist, lockedPlayer.Name) then
+        local mr = myRoot()
+        if mr then
+            local y = math.max(camPos.Y, mr.Position.Y + config.aboveHeight)
+            camPos = Vector3.new(camPos.X, y, camPos.Z)
+        end
     end
+
+    -- CÁMARA DIRECTA: cero LERP, cero smoothMode
+    Camera.CFrame = CFrame.new(camPos, aimPosition)
 end
 
-RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
+-- Prioridad "Last": el lock escribe la cámara al final del frame y nada la sobreescribe después.
+-- Si la cámara se siente rara, vuelve a: Enum.RenderPriority.Camera.Value + 1
+RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Last.Value, cameraLockStep)
 
 -- ============================================
 -- EVENTOS DEL MENÚ LOCK
@@ -1253,7 +1282,7 @@ end)
 
 dragBtn.MouseButton1Click:Connect(function()
     config.isDraggable = not config.isDraggable
-    dragBtn.Text = config.isDraggable and "Arrastrable: ON" or "Arrastrable: OFF"
+    dragBtn.Text = "Arrastrable: " .. (config.isDraggable and "ON" or "OFF")
     dragBtn.BackgroundColor3 = config.isDraggable and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
     saveConfig()
 end)
@@ -1324,6 +1353,21 @@ keyBtn.MouseButton1Click:Connect(function()
     keyBtn.Text = listeningForKey and "Presiona..." or ("Tecla: " .. lockKey.Name)
     keyBtn.BackgroundColor3 = listeningForKey and Color3.fromRGB(255, 220, 130) or Color3.fromRGB(70, 130, 220)
     keyBtn.TextColor3 = listeningForKey and Color3.fromRGB(20, 20, 20) or Color3.fromRGB(255, 255, 255)
+end)
+
+aboveBtn.MouseButton1Click:Connect(function()
+    config.aboveView = not config.aboveView
+    aboveBtn.Text = "Above: " .. (config.aboveView and "ON" or "OFF")
+    aboveBtn.BackgroundColor3 = config.aboveView and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    saveConfig()
+end)
+
+aboveHeightBtn.MouseButton1Click:Connect(function()
+    local h = config.aboveHeight + 3
+    if h > 24 then h = 6 end
+    config.aboveHeight = h
+    aboveHeightBtn.Text = "Altura: " .. h
+    saveConfig()
 end)
 
 minBtn.MouseButton1Click:Connect(function()
@@ -1533,13 +1577,13 @@ end)
 
 if localPlayer.Character then hookDash() end
 
--- Mostrar menú
+-- Mostrar menú (CORREGIDO: usa task.delay en vez de delay global)
 task.delay(2, function()
     if loadGui and loadGui.Parent then loadGui:Destroy() end
     menuFrame.Visible = true
 end)
 
--- Aplicar visuales iniciales
+-- Aplicar visuales iniciales (sincroniza la interfaz con la config guardada)
 local function refreshAllVisuals()
     lockButton.Size = UDim2.new(0, config.buttonSize, 0, config.buttonSize)
     lockButton.Visible = config.buttonVisible
@@ -1559,6 +1603,9 @@ local function refreshAllVisuals()
     partBtn.BackgroundColor3 = config.lockPart == "head" and Color3.fromRGB(160, 50, 50) or Color3.fromRGB(70, 130, 220)
     keyBtn.Text = "Tecla: " .. lockKey.Name
     transBtn.Text = "Transp: " .. math.floor(config.menuTransparency * 100) .. "%"
+    aboveBtn.Text = "Above: " .. (config.aboveView and "ON" or "OFF")
+    aboveBtn.BackgroundColor3 = config.aboveView and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    aboveHeightBtn.Text = "Altura: " .. config.aboveHeight
     updateNsToggle()
     updateListCounts()
     nsJumpLabel.Text = "Jump Power: " .. config.jumpPower
@@ -1584,7 +1631,7 @@ task.spawn(function()
     end
 end)
 
-print("Zeidop Hub cargado OK - LOCK + INSTANT DASH + STUN + DASH + LISTA")
+print("Zeidop Hub cargado OK - LOCK + INSTANT DASH + STUN + DASH + LISTA + DASH ASSIST")
 
 -- FIX SCROLL DEL SELECTOR
 task.spawn(function()
@@ -1609,21 +1656,25 @@ task.spawn(function()
     end
 end)
 
+
 -- ============================================
 -- DASH ASSIST (CON MENÚ DE CONFIGURACIÓN)
+-- Corrige la dirección del dash hacia donde estará el enemigo.
+-- Solo actúa con el LOCK activo y si tu dash ya iba hacia él.
 -- ============================================
 do
-    -- Variables de configuración (se cargan de config o usan default)
     local STEER_MAX_ANGLE = math.rad(config.assistAngle or 50)
     local MAX_T = config.assistMaxT or 0.44
     local STOP_DIST = config.assistStopDist or 3
     local SPIKE_ON = config.assistSpikeOn or 50
     local SPIKE_OFF = config.assistSpikeOff or 35
     local WINDOW = config.assistWindow or 0.35
+    local LAG = config.assistLag or 0.06   -- compensación de ping (s): el enemigo que ves va atrasado
+    local SPIKE_JUMP = 25                  -- salto de velocidad que cuenta como dash (dashes encadenados)
 
     if config.dashAssist == nil then config.dashAssist = true end
-    
-    -- Botón principal de Dash Assist
+
+    -- Botón principal
     local assistBtn = Instance.new("TextButton")
     assistBtn.Size = UDim2.new(0.75, 0, 0, 24)
     assistBtn.Position = UDim2.new(0, 0, 0, 190)
@@ -1634,7 +1685,7 @@ do
     assistBtn.Parent = dashPage
     Instance.new("UICorner", assistBtn).CornerRadius = UDim.new(0, 6)
 
-    -- Botón de Tuerca (Configuración)
+    -- Botón de configuración
     local gearBtn = Instance.new("TextButton")
     gearBtn.Size = UDim2.new(0.23, 0, 0, 24)
     gearBtn.Position = UDim2.new(0.77, 0, 0, 190)
@@ -1662,8 +1713,8 @@ do
     -- Menú flotante de configuración
     local assistSettingsGui = Instance.new("Frame")
     assistSettingsGui.Name = "AssistSettings"
-    assistSettingsGui.Size = UDim2.new(0, 180, 0, 210)
-    assistSettingsGui.Position = UDim2.new(0.5, -90, 0.5, -105)
+    assistSettingsGui.Size = UDim2.new(0, 180, 0, 230)
+    assistSettingsGui.Position = UDim2.new(0.5, -90, 0.5, -115)
     assistSettingsGui.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
     assistSettingsGui.BorderSizePixel = 0
     assistSettingsGui.Visible = false
@@ -1674,7 +1725,6 @@ do
     local assistStroke = Instance.new("UIStroke")
     assistStroke.Color = Color3.fromRGB(160, 120, 255)
     assistStroke.Thickness = 1.5
-    assistStroke.ZIndex = 61
     assistStroke.Parent = assistSettingsGui
 
     local assistTitle = Instance.new("TextLabel")
@@ -1708,7 +1758,7 @@ do
     assistScroll.BackgroundTransparency = 1
     assistScroll.BorderSizePixel = 0
     assistScroll.ScrollBarThickness = 3
-    assistScroll.CanvasSize = UDim2.new(0, 0, 0, 180)
+    assistScroll.CanvasSize = UDim2.new(0, 0, 0, 205)
     assistScroll.ZIndex = 62
     assistScroll.Parent = assistSettingsGui
 
@@ -1722,7 +1772,7 @@ do
         row.BackgroundTransparency = 1
         row.ZIndex = 63
         row.Parent = assistScroll
-        
+
         local label = Instance.new("TextLabel")
         label.Size = UDim2.new(0.55, 0, 1, 0)
         label.Position = UDim2.new(0, 0, 0, 0)
@@ -1733,97 +1783,106 @@ do
         label.TextXAlignment = Enum.TextXAlignment.Left
         label.ZIndex = 64
         label.Parent = row
-        
+
         local minus = Instance.new("TextButton")
         minus.Size = UDim2.new(0, 20, 1, 0)
         minus.Position = UDim2.new(0.55, 2, 0, 0)
         minus.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
         minus.Text = "-"
-        minus.TextColor3 = Color3.fromRGB(255,255,255)
+        minus.TextColor3 = Color3.fromRGB(255, 255, 255)
         minus.TextSize = 12
         minus.Font = Enum.Font.GothamBold
         minus.BorderSizePixel = 0
         minus.ZIndex = 64
         minus.Parent = row
         Instance.new("UICorner", minus).CornerRadius = UDim.new(0, 4)
-        
+
         local plus = Instance.new("TextButton")
         plus.Size = UDim2.new(0, 20, 1, 0)
         plus.Position = UDim2.new(1, -22, 0, 0)
         plus.BackgroundColor3 = Color3.fromRGB(45, 160, 70)
         plus.Text = "+"
-        plus.TextColor3 = Color3.fromRGB(255,255,255)
+        plus.TextColor3 = Color3.fromRGB(255, 255, 255)
         plus.TextSize = 12
         plus.Font = Enum.Font.GothamBold
         plus.BorderSizePixel = 0
         plus.ZIndex = 64
         plus.Parent = row
         Instance.new("UICorner", plus).CornerRadius = UDim.new(0, 4)
-        
+
         local function update()
             local val = getConfigVal()
             if isFloat then
                 label.Text = name .. ": " .. string.format("%.2f", val)
             else
-                label.Text = name .. ": " .. math.floor(val)
+                label.Text = name .. ": " .. math.floor(val + 0.5)
             end
         end
-        
+
         minus.MouseButton1Click:Connect(function()
-            local val = math.max(min, getConfigVal() - step)
+            local val = math.floor(math.max(min, getConfigVal() - step) * 100 + 0.5) / 100
             setConfigVal(val)
             update()
             saveConfig()
         end)
-        
+
         plus.MouseButton1Click:Connect(function()
-            local val = math.min(max, getConfigVal() + step)
+            local val = math.floor(math.min(max, getConfigVal() + step) * 100 + 0.5) / 100
             setConfigVal(val)
             update()
             saveConfig()
         end)
-        
+
         update()
     end
 
-    createSetting("Angle", 10, 180, 5, false,
+    createSetting("Angle", 10, 180, 1, false,
         function() return config.assistAngle or 50 end,
         function(v) config.assistAngle = v STEER_MAX_ANGLE = math.rad(v) end)
-        
-    createSetting("Max T", 0.1, 2.0, 0.05, true,
+
+    createSetting("Max T", 0.1, 2.0, 0.01, true,
         function() return config.assistMaxT or 0.44 end,
         function(v) config.assistMaxT = v MAX_T = v end)
-        
+
+    createSetting("Lag", 0, 0.3, 0.01, true,
+        function() return config.assistLag or 0.06 end,
+        function(v) config.assistLag = v LAG = v end)
+
     createSetting("Stop Dist", 1, 20, 1, false,
         function() return config.assistStopDist or 3 end,
         function(v) config.assistStopDist = v STOP_DIST = v end)
-        
-    createSetting("Spike ON", 10, 200, 5, false,
+
+    createSetting("Spike ON", 10, 200, 1, false,
         function() return config.assistSpikeOn or 50 end,
         function(v) config.assistSpikeOn = v SPIKE_ON = v end)
-        
-    createSetting("Spike OFF", 10, 200, 5, false,
+
+    createSetting("Spike OFF", 10, 200, 1, false,
         function() return config.assistSpikeOff or 35 end,
         function(v) config.assistSpikeOff = v SPIKE_OFF = v end)
-        
-    createSetting("Window", 0.05, 2.0, 0.05, true,
+
+    createSetting("Window", 0.05, 2.0, 0.01, true,
         function() return config.assistWindow or 0.35 end,
         function(v) config.assistWindow = v WINDOW = v end)
 
     gearBtn.MouseButton1Click:Connect(function()
         assistSettingsGui.Visible = not assistSettingsGui.Visible
     end)
-    
+
     assistClose.MouseButton1Click:Connect(function()
         assistSettingsGui.Visible = false
     end)
 
-    -- Lógica interna del Dash Assist (Intacta)
+    -- ============================================
+    -- Lógica interna del Dash Assist
+    -- ============================================
     local active = false
-    local driver = nil
-    local origDir = nil
+    local driver = nil      -- BodyVelocity / LinearVelocity del dash (si existe)
+    local origDir = nil     -- dirección original de tu dash
     local untilT = 0
     local lastH = 0
+    local tPrevRoot, tPrevPos = nil, nil
+    local estVel = Vector3.new(0, 0, 0) -- velocidad estimada por cambio de posición (respaldo)
+
     local function usable(c)
         if c:IsA("BodyVelocity") then return true end
         if c:IsA("LinearVelocity") then
@@ -1842,6 +1901,7 @@ do
         end
         return nil
     end
+
     local function getTargetRoot()
         if not targetLock or not lockedPlayer then return nil end
         local ch = lockedPlayer.Character
@@ -1850,10 +1910,20 @@ do
         if r and h and h.Health > 0 then return r end
         return nil
     end
+
+    -- Dirección de intercepción: donde estará el enemigo cuando llegues a él
     local function interceptDir(myPos, tRoot, speed)
         local r = Vector3.new(tRoot.Position.X - myPos.X, 0, tRoot.Position.Z - myPos.Z)
         local tv = tRoot.AssemblyLinearVelocity
         local v = Vector3.new(tv.X, 0, tv.Z)
+
+        -- Respaldo: si la física dice ~0 pero se mueve (CFrame/tween), usa la velocidad por posición
+        if v.Magnitude < 1 and tPrevRoot == tRoot then v = estVel end
+        if v.Magnitude > 150 then v = v.Unit * 150 end
+
+        -- Compensación de ping: el enemigo real ya va adelante de lo que ves
+        r = r + v * LAG
+
         local a = v:Dot(v) - speed * speed
         local b = 2 * r:Dot(v)
         local cc = r:Dot(r)
@@ -1875,6 +1945,7 @@ do
         if aim.Magnitude < 0.01 then return nil end
         return aim.Unit
     end
+
     local function startAssist(hrp, drv)
         if active then
             if drv and not driver then
@@ -1891,16 +1962,21 @@ do
         origDir = h.Unit
         untilT = tick() + (drv and 1.5 or WINDOW)
     end
+
     local function steer(hrp)
         local tRoot = getTargetRoot()
         if not tRoot or not origDir then return end
         local cur = (driver and driver.Parent) and getVel(driver) or hrp.AssemblyLinearVelocity
         local speedH = Vector3.new(cur.X, 0, cur.Z).Magnitude
         if speedH < 10 then return end
+
         local toT = Vector3.new(tRoot.Position.X - hrp.Position.X, 0, tRoot.Position.Z - hrp.Position.Z)
         if toT.Magnitude < STOP_DIST then return end
+
+        -- Solo corrige si tu dash ya iba (más o menos) hacia el enemigo
         local ang = math.acos(math.clamp(origDir:Dot(toT.Unit), -1, 1))
         if ang > STEER_MAX_ANGLE then return end
+
         local dir = interceptDir(hrp.Position, tRoot, speedH)
         if not dir then return end
         local nv = Vector3.new(dir.X * speedH, cur.Y, dir.Z * speedH)
@@ -1910,6 +1986,8 @@ do
             hrp.AssemblyLinearVelocity = nv
         end
     end
+
+    -- Detección principal: BodyVelocity / LinearVelocity que aparece en tu HumanoidRootPart
     local conn = nil
     local function hookChar(char)
         if conn then conn:Disconnect() conn = nil end
@@ -1918,7 +1996,7 @@ do
         conn = hrp.ChildAdded:Connect(function(child)
             if not config.dashAssist or not usable(child) then return end
             RunService.Heartbeat:Wait()
-            RunService.Heartbeat:Wait()
+            RunService.Heartbeat:Wait() -- espera a que el juego (y tu multiplicador) fijen la velocidad
             if child.Parent and getTargetRoot() then startAssist(hrp, child) end
         end)
     end
@@ -1928,15 +2006,35 @@ do
         driver = nil
         task.spawn(hookChar, c)
     end)
-    RunService.Heartbeat:Connect(function()
+
+    -- Loop: velocidad de respaldo del enemigo + corrección + detección por pico de velocidad
+    RunService.Heartbeat:Connect(function(dt)
+        -- Velocidad estimada por posición del objetivo lockeado
+        local tr = getTargetRoot()
+        if tr then
+            local p = tr.Position
+            if tPrevRoot == tr and tPrevPos and dt and dt > 0 then
+                local d = p - tPrevPos
+                estVel = Vector3.new(d.X, 0, d.Z) / dt
+            else
+                estVel = Vector3.new(0, 0, 0)
+            end
+            tPrevRoot, tPrevPos = tr, p
+        else
+            tPrevRoot, tPrevPos = nil, nil
+            estVel = Vector3.new(0, 0, 0)
+        end
+
         if not config.dashAssist then active = false driver = nil return end
         local char = localPlayer.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
+
         local v = hrp.AssemblyLinearVelocity
         local h = Vector3.new(v.X, 0, v.Z).Magnitude
+
         if not active then
-            if h > SPIKE_ON and lastH < SPIKE_OFF and getTargetRoot() then
+            if h > SPIKE_ON and (lastH < SPIKE_OFF or h - lastH > SPIKE_JUMP) and tr then
                 startAssist(hrp, findDriver(hrp))
             end
         else
