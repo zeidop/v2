@@ -19,6 +19,9 @@ local config = {
     jumpPower = 50, dashForce = 60, jumpBtnSize = 62, dashBtnSize = 62,
     dashMultiplier = 1.5, dashEnabled = true, instantDash = false,
     antiStun = false, dashAssist = true,
+    -- NUEVOS VALORES PARA EL DASH ASSIST
+    assistAngle = 50, assistMaxT = 0.44, assistStopDist = 3,
+    assistSpikeOn = 50, assistSpikeOff = 35, assistWindow = 0.35,
     lockBtnXScale = 0.75, lockBtnXOffset = 0,
     lockBtnYScale = 0.65, lockBtnYOffset = 0
 }
@@ -1607,19 +1610,22 @@ task.spawn(function()
 end)
 
 -- ============================================
--- DASH ASSIST (CORREGIDO: variable 'c' renombrada a 'cc')
+-- DASH ASSIST (CON MENÚ DE CONFIGURACIÓN)
 -- ============================================
 do
-    local STEER_MAX_ANGLE = math.rad(50)
-    local MAX_T = 0.45
-    local STOP_DIST = 3
-    local SPIKE_ON, SPIKE_OFF = 50, 35
-    local WINDOW = 0.35
+    -- Variables de configuración (se cargan de config o usan default)
+    local STEER_MAX_ANGLE = math.rad(config.assistAngle or 50)
+    local MAX_T = config.assistMaxT or 0.44
+    local STOP_DIST = config.assistStopDist or 3
+    local SPIKE_ON = config.assistSpikeOn or 50
+    local SPIKE_OFF = config.assistSpikeOff or 35
+    local WINDOW = config.assistWindow or 0.35
 
     if config.dashAssist == nil then config.dashAssist = true end
-
+    
+    -- Botón principal de Dash Assist
     local assistBtn = Instance.new("TextButton")
-    assistBtn.Size = UDim2.new(1, 0, 0, 24)
+    assistBtn.Size = UDim2.new(0.75, 0, 0, 24)
     assistBtn.Position = UDim2.new(0, 0, 0, 190)
     assistBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     assistBtn.TextSize = 11
@@ -1628,122 +1634,18 @@ do
     assistBtn.Parent = dashPage
     Instance.new("UICorner", assistBtn).CornerRadius = UDim.new(0, 6)
 
-    local function refreshAssistBtn()
-        assistBtn.Text = "DASH ASSIST: " .. (config.dashAssist and "ON" or "OFF")
-        assistBtn.BackgroundColor3 = config.dashAssist and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
-    end
-    refreshAssistBtn()
-    assistBtn.MouseButton1Click:Connect(function()
-        config.dashAssist = not config.dashAssist
-        refreshAssistBtn()
-        saveConfig()
-    end)
-
-    local active = false
-    local driver = nil
-    local origDir = nil
-    local untilT = 0
-    local lastH = 0
-
-    local function usable(c)
-        if c:IsA("BodyVelocity") then return true end
-        if c:IsA("LinearVelocity") then
-            local ok, rel = pcall(function() return c.RelativeTo end)
-            return ok and rel == Enum.ActuatorRelativeTo.World
-        end
-        return false
-    end
-    local function getVel(c) return c:IsA("BodyVelocity") and c.Velocity or c.VectorVelocity end
-    local function setVel(c, v)
-        if c:IsA("BodyVelocity") then c.Velocity = v else c.VectorVelocity = v end
-    end
-    local function findDriver(hrp)
-        for _, c in ipairs(hrp:GetChildren()) do
-            if usable(c) then return c end
-        end
-        return nil
-    end
-
-    local function getTargetRoot()
-        if not targetLock or not lockedPlayer then return nil end
-        local ch = lockedPlayer.Character
-        local r = ch and ch:FindFirstChild("HumanoidRootPart")
-        local h = ch and ch:FindFirstChildOfClass("Humanoid")
-        if r and h and h.Health > 0 then return r end
-        return nil
-    end
-
-    -- CORRECCIÓN: variable 'c' renombrada a 'cc' para evitar conflicto con parámetro
-    local function interceptDir(myPos, tRoot, speed)
-        local r = Vector3.new(tRoot.Position.X - myPos.X, 0, tRoot.Position.Z - myPos.Z)
-        local tv = tRoot.AssemblyLinearVelocity
-        local v = Vector3.new(tv.X, 0, tv.Z)
-        local a = v:Dot(v) - speed * speed
-        local b = 2 * r:Dot(v)
-        local cc = r:Dot(r)  -- ← AQUÍ ESTABA EL BUG: antes era 'c', ahora es 'cc'
-        local t = nil
-        if math.abs(a) < 1e-4 then
-            if b < 0 then t = -cc / b end
-        else
--- ============================================
--- DASH ASSIST (valores ajustables desde el menú)
--- ============================================
-do
-    -- Cargar valores guardados del archivo
-    pcall(function()
-        if readfile and isfile and isfile(SAVE_FILE) then
-            local d = HttpService:JSONDecode(readfile(SAVE_FILE))
-            if type(d) == "table" then
-                if type(d.assistMaxT) == "number" then config.assistMaxT = d.assistMaxT end
-                if type(d.assistAngle) == "number" then config.assistAngle = d.assistAngle end
-                if type(d.assistStopDist) == "number" then config.assistStopDist = d.assistStopDist end
-                if type(d.assistSpikeOn) == "number" then config.assistSpikeOn = d.assistSpikeOn end
-                if type(d.assistSpikeOff) == "number" then config.assistSpikeOff = d.assistSpikeOff end
-                if type(d.assistWindow) == "number" then config.assistWindow = d.assistWindow end
-            end
-        end
-    end)
-
-    -- Defaults si no hay nada guardado
-    if config.assistMaxT == nil then config.assistMaxT = 0.44 end
-    if config.assistAngle == nil then config.assistAngle = 50 end
-    if config.assistStopDist == nil then config.assistStopDist = 3 end
-    if config.assistSpikeOn == nil then config.assistSpikeOn = 50 end
-    if config.assistSpikeOff == nil then config.assistSpikeOff = 35 end
-    if config.assistWindow == nil then config.assistWindow = 0.35 end
-    if config.dashAssist == nil then config.dashAssist = true end
-
-    -- Variables activas (la lógica lee estas)
-    local MAX_T = config.assistMaxT
-    local STEER_MAX_ANGLE = math.rad(config.assistAngle)
-    local STOP_DIST = config.assistStopDist
-    local SPIKE_ON = config.assistSpikeOn
-    local SPIKE_OFF = config.assistSpikeOff
-    local WINDOW = config.assistWindow
-
-    -- Botón ON/OFF (más corto para dejar espacio al ⚙)
-    local assistBtn = Instance.new("TextButton")
-    assistBtn.Size = UDim2.new(0, 150, 0, 24)
-    assistBtn.Position = UDim2.new(0, 5, 0, 190)
-    assistBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    assistBtn.TextSize = 11
-    assistBtn.Font = Enum.Font.GothamBold
-    assistBtn.BorderSizePixel = 0
-    assistBtn.Parent = dashPage
-    Instance.new("UICorner", assistBtn).CornerRadius = UDim.new(0, 6)
-
-    -- Botón ⚙ para abrir configuración
-    local assistCfgBtn = Instance.new("TextButton")
-    assistCfgBtn.Size = UDim2.new(0, 34, 0, 24)
-    assistCfgBtn.Position = UDim2.new(0, 159, 0, 190)
-    assistCfgBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
-    assistCfgBtn.Text = "⚙"
-    assistCfgBtn.TextColor3 = Color3.fromRGB(160, 120, 255)
-    assistCfgBtn.TextSize = 14
-    assistCfgBtn.Font = Enum.Font.GothamBold
-    assistCfgBtn.BorderSizePixel = 0
-    assistCfgBtn.Parent = dashPage
-    Instance.new("UICorner", assistCfgBtn).CornerRadius = UDim.new(0, 6)
+    -- Botón de Tuerca (Configuración)
+    local gearBtn = Instance.new("TextButton")
+    gearBtn.Size = UDim2.new(0.23, 0, 0, 24)
+    gearBtn.Position = UDim2.new(0.77, 0, 0, 190)
+    gearBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+    gearBtn.Text = "⚙️"
+    gearBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    gearBtn.TextSize = 14
+    gearBtn.Font = Enum.Font.GothamBold
+    gearBtn.BorderSizePixel = 0
+    gearBtn.Parent = dashPage
+    Instance.new("UICorner", gearBtn).CornerRadius = UDim.new(0, 6)
 
     local function refreshAssistBtn()
         assistBtn.Text = "DASH ASSIST: " .. (config.dashAssist and "ON" or "OFF")
@@ -1757,160 +1659,171 @@ do
         saveConfig()
     end)
 
-    -- ============================================
-    -- POPUP DE CONFIGURACIÓN
-    -- ============================================
-    local cfgGui = Instance.new("Frame")
-    cfgGui.Name = "AssistCfgPanel"
-    cfgGui.Size = UDim2.new(0, 190, 0, 210)
-    cfgGui.Position = UDim2.new(0.5, -95, 0.5, -105)
-    cfgGui.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-    cfgGui.BorderSizePixel = 0
-    cfgGui.Active = true
-    cfgGui.Visible = false
-    cfgGui.ZIndex = 50
-    cfgGui.Parent = screenGui
-    Instance.new("UICorner", cfgGui).CornerRadius = UDim.new(0, 10)
+    -- Menú flotante de configuración
+    local assistSettingsGui = Instance.new("Frame")
+    assistSettingsGui.Name = "AssistSettings"
+    assistSettingsGui.Size = UDim2.new(0, 180, 0, 210)
+    assistSettingsGui.Position = UDim2.new(0.5, -90, 0.5, -105)
+    assistSettingsGui.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+    assistSettingsGui.BorderSizePixel = 0
+    assistSettingsGui.Visible = false
+    assistSettingsGui.ZIndex = 60
+    assistSettingsGui.Parent = screenGui
+    Instance.new("UICorner", assistSettingsGui).CornerRadius = UDim.new(0, 10)
 
-    local cfgStroke = Instance.new("UIStroke")
-    cfgStroke.Color = Color3.fromRGB(160, 120, 255)
-    cfgStroke.Thickness = 1.5
-    cfgStroke.Parent = cfgGui
+    local assistStroke = Instance.new("UIStroke")
+    assistStroke.Color = Color3.fromRGB(160, 120, 255)
+    assistStroke.Thickness = 1.5
+    assistStroke.ZIndex = 61
+    assistStroke.Parent = assistSettingsGui
 
-    local cfgTitle = Instance.new("TextLabel")
-    cfgTitle.Size = UDim2.new(1, -30, 0, 22)
-    cfgTitle.Position = UDim2.new(0, 8, 0, 4)
-    cfgTitle.BackgroundTransparency = 1
-    cfgTitle.Text = "ASSIST CONFIG"
-    cfgTitle.TextColor3 = Color3.fromRGB(160, 120, 255)
-    cfgTitle.TextSize = 11
-    cfgTitle.Font = Enum.Font.GothamBold
-    cfgTitle.TextXAlignment = Enum.TextXAlignment.Left
-    cfgTitle.Parent = cfgGui
+    local assistTitle = Instance.new("TextLabel")
+    assistTitle.Size = UDim2.new(1, -30, 0, 24)
+    assistTitle.Position = UDim2.new(0, 8, 0, 4)
+    assistTitle.BackgroundTransparency = 1
+    assistTitle.Text = "Dash Assist Config"
+    assistTitle.TextColor3 = Color3.fromRGB(160, 120, 255)
+    assistTitle.TextSize = 11
+    assistTitle.Font = Enum.Font.GothamBold
+    assistTitle.TextXAlignment = Enum.TextXAlignment.Left
+    assistTitle.ZIndex = 62
+    assistTitle.Parent = assistSettingsGui
 
-    local cfgClose = Instance.new("TextButton")
-    cfgClose.Size = UDim2.new(0, 22, 0, 22)
-    cfgClose.Position = UDim2.new(1, -26, 0, 4)
-    cfgClose.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
-    cfgClose.Text = "X"
-    cfgClose.TextColor3 = Color3.fromRGB(255, 255, 255)
-    cfgClose.TextSize = 12
-    cfgClose.Font = Enum.Font.GothamBold
-    cfgClose.BorderSizePixel = 0
-    cfgClose.Parent = cfgGui
-    Instance.new("UICorner", cfgClose).CornerRadius = UDim.new(0, 5)
+    local assistClose = Instance.new("TextButton")
+    assistClose.Size = UDim2.new(0, 20, 0, 20)
+    assistClose.Position = UDim2.new(1, -24, 0, 6)
+    assistClose.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
+    assistClose.Text = "X"
+    assistClose.TextColor3 = Color3.fromRGB(255, 255, 255)
+    assistClose.TextSize = 10
+    assistClose.Font = Enum.Font.GothamBold
+    assistClose.BorderSizePixel = 0
+    assistClose.ZIndex = 62
+    assistClose.Parent = assistSettingsGui
+    Instance.new("UICorner", assistClose).CornerRadius = UDim.new(0, 5)
 
-    -- Helper para redondear al paso
-    local function roundStep(v, step)
-        return math.floor(v / step + 0.5) * step
-    end
+    local assistScroll = Instance.new("ScrollingFrame")
+    assistScroll.Size = UDim2.new(1, -12, 1, -34)
+    assistScroll.Position = UDim2.new(0, 6, 0, 30)
+    assistScroll.BackgroundTransparency = 1
+    assistScroll.BorderSizePixel = 0
+    assistScroll.ScrollBarThickness = 3
+    assistScroll.CanvasSize = UDim2.new(0, 0, 0, 180)
+    assistScroll.ZIndex = 62
+    assistScroll.Parent = assistSettingsGui
 
-    -- Helper para crear filas de ajuste
-    local cfgY = 30
-    local function makeCfgRow(name, getVal, setVal, step, min, max, fmt)
+    local assistLayout = Instance.new("UIListLayout")
+    assistLayout.Padding = UDim.new(0, 6)
+    assistLayout.Parent = assistScroll
+
+    local function createSetting(name, min, max, step, isFloat, getConfigVal, setConfigVal)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, -5, 0, 22)
+        row.BackgroundTransparency = 1
+        row.ZIndex = 63
+        row.Parent = assistScroll
+        
         local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(0, 92, 0, 20)
-        label.Position = UDim2.new(0, 8, 0, cfgY + 2)
+        label.Size = UDim2.new(0.55, 0, 1, 0)
+        label.Position = UDim2.new(0, 0, 0, 0)
         label.BackgroundTransparency = 1
-        label.Text = name .. ": " .. fmt(getVal())
         label.TextColor3 = Color3.fromRGB(200, 200, 210)
         label.TextSize = 9
-        label.Font = Enum.Font.GothamBold
+        label.Font = Enum.Font.Gotham
         label.TextXAlignment = Enum.TextXAlignment.Left
-        label.Parent = cfgGui
-
+        label.ZIndex = 64
+        label.Parent = row
+        
         local minus = Instance.new("TextButton")
-        minus.Size = UDim2.new(0, 28, 0, 20)
-        minus.Position = UDim2.new(0, 104, 0, cfgY)
-        minus.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+        minus.Size = UDim2.new(0, 20, 1, 0)
+        minus.Position = UDim2.new(0.55, 2, 0, 0)
+        minus.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
         minus.Text = "-"
-        minus.TextColor3 = Color3.fromRGB(255, 255, 255)
+        minus.TextColor3 = Color3.fromRGB(255,255,255)
         minus.TextSize = 12
         minus.Font = Enum.Font.GothamBold
         minus.BorderSizePixel = 0
-        minus.Parent = cfgGui
+        minus.ZIndex = 64
+        minus.Parent = row
         Instance.new("UICorner", minus).CornerRadius = UDim.new(0, 4)
-
+        
         local plus = Instance.new("TextButton")
-        plus.Size = UDim2.new(0, 28, 0, 20)
-        plus.Position = UDim2.new(0, 136, 0, cfgY)
-        plus.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+        plus.Size = UDim2.new(0, 20, 1, 0)
+        plus.Position = UDim2.new(1, -22, 0, 0)
+        plus.BackgroundColor3 = Color3.fromRGB(45, 160, 70)
         plus.Text = "+"
-        plus.TextColor3 = Color3.fromRGB(255, 255, 255)
+        plus.TextColor3 = Color3.fromRGB(255,255,255)
         plus.TextSize = 12
         plus.Font = Enum.Font.GothamBold
         plus.BorderSizePixel = 0
-        plus.Parent = cfgGui
+        plus.ZIndex = 64
+        plus.Parent = row
         Instance.new("UICorner", plus).CornerRadius = UDim.new(0, 4)
-
+        
         local function update()
-            label.Text = name .. ": " .. fmt(getVal())
+            local val = getConfigVal()
+            if isFloat then
+                label.Text = name .. ": " .. string.format("%.2f", val)
+            else
+                label.Text = name .. ": " .. math.floor(val)
+            end
         end
-
+        
         minus.MouseButton1Click:Connect(function()
-            local v = roundStep(getVal() - step, step)
-            if v < min then v = min end
-            setVal(v)
+            local val = math.max(min, getConfigVal() - step)
+            setConfigVal(val)
             update()
             saveConfig()
         end)
-
+        
         plus.MouseButton1Click:Connect(function()
-            local v = roundStep(getVal() + step, step)
-            if v > max then v = max end
-            setVal(v)
+            local val = math.min(max, getConfigVal() + step)
+            setConfigVal(val)
             update()
             saveConfig()
         end)
-
-        cfgY = cfgY + 26
+        
+        update()
     end
 
-    -- Filas de ajuste
-    makeCfgRow("Tiempo", function() return MAX_T end,
-        function(v) MAX_T = v; config.assistMaxT = v end,
-        0.01, 0.10, 1.50, function(v) return string.format("%.2f", v) end)
+    createSetting("Angle", 10, 180, 5, false,
+        function() return config.assistAngle or 50 end,
+        function(v) config.assistAngle = v STEER_MAX_ANGLE = math.rad(v) end)
+        
+    createSetting("Max T", 0.1, 2.0, 0.05, true,
+        function() return config.assistMaxT or 0.44 end,
+        function(v) config.assistMaxT = v MAX_T = v end)
+        
+    createSetting("Stop Dist", 1, 20, 1, false,
+        function() return config.assistStopDist or 3 end,
+        function(v) config.assistStopDist = v STOP_DIST = v end)
+        
+    createSetting("Spike ON", 10, 200, 5, false,
+        function() return config.assistSpikeOn or 50 end,
+        function(v) config.assistSpikeOn = v SPIKE_ON = v end)
+        
+    createSetting("Spike OFF", 10, 200, 5, false,
+        function() return config.assistSpikeOff or 35 end,
+        function(v) config.assistSpikeOff = v SPIKE_OFF = v end)
+        
+    createSetting("Window", 0.05, 2.0, 0.05, true,
+        function() return config.assistWindow or 0.35 end,
+        function(v) config.assistWindow = v WINDOW = v end)
 
-    makeCfgRow("Ángulo", function() return config.assistAngle end,
-        function(v) config.assistAngle = v; STEER_MAX_ANGLE = math.rad(v) end,
-        5, 10, 90, function(v) return string.format("%d°", v) end)
-
-    makeCfgRow("Freno", function() return STOP_DIST end,
-        function(v) STOP_DIST = v; config.assistStopDist = v end,
-        1, 1, 10, function(v) return string.format("%d", v) end)
-
-    makeCfgRow("Spike ON", function() return SPIKE_ON end,
-        function(v) SPIKE_ON = v; config.assistSpikeOn = v end,
-        5, 20, 120, function(v) return string.format("%d", v) end)
-
-    makeCfgRow("Spike OFF", function() return SPIKE_OFF end,
-        function(v) SPIKE_OFF = v; config.assistSpikeOff = v end,
-        5, 10, 100, function(v) return string.format("%d", v) end)
-
-    makeCfgRow("Ventana", function() return WINDOW end,
-        function(v) WINDOW = v; config.assistWindow = v end,
-        0.05, 0.10, 1.00, function(v) return string.format("%.2f", v) end)
-
-    -- Abrir/cerrar popup
-    assistCfgBtn.MouseButton1Click:Connect(function()
-        cfgGui.Visible = not cfgGui.Visible
+    gearBtn.MouseButton1Click:Connect(function()
+        assistSettingsGui.Visible = not assistSettingsGui.Visible
     end)
-    cfgClose.MouseButton1Click:Connect(function()
-        cfgGui.Visible = false
+    
+    assistClose.MouseButton1Click:Connect(function()
+        assistSettingsGui.Visible = false
     end)
 
-    -- Hacer popup arrastrable
-    makeDraggable(cfgGui, function() return true end)
-
-    -- ============================================
-    -- LÓGICA DEL DASH ASSIST
-    -- ============================================
+    -- Lógica interna del Dash Assist (Intacta)
     local active = false
     local driver = nil
     local origDir = nil
     local untilT = 0
     local lastH = 0
-
     local function usable(c)
         if c:IsA("BodyVelocity") then return true end
         if c:IsA("LinearVelocity") then
@@ -1919,19 +1832,16 @@ do
         end
         return false
     end
-
     local function getVel(c) return c:IsA("BodyVelocity") and c.Velocity or c.VectorVelocity end
     local function setVel(c, v)
         if c:IsA("BodyVelocity") then c.Velocity = v else c.VectorVelocity = v end
     end
-
     local function findDriver(hrp)
         for _, c in ipairs(hrp:GetChildren()) do
             if usable(c) then return c end
         end
         return nil
     end
-
     local function getTargetRoot()
         if not targetLock or not lockedPlayer then return nil end
         local ch = lockedPlayer.Character
@@ -1940,7 +1850,6 @@ do
         if r and h and h.Health > 0 then return r end
         return nil
     end
-
     local function interceptDir(myPos, tRoot, speed)
         local r = Vector3.new(tRoot.Position.X - myPos.X, 0, tRoot.Position.Z - myPos.Z)
         local tv = tRoot.AssemblyLinearVelocity
@@ -1966,7 +1875,6 @@ do
         if aim.Magnitude < 0.01 then return nil end
         return aim.Unit
     end
-
     local function startAssist(hrp, drv)
         if active then
             if drv and not driver then
@@ -1983,7 +1891,6 @@ do
         origDir = h.Unit
         untilT = tick() + (drv and 1.5 or WINDOW)
     end
-
     local function steer(hrp)
         local tRoot = getTargetRoot()
         if not tRoot or not origDir then return end
@@ -2003,7 +1910,6 @@ do
             hrp.AssemblyLinearVelocity = nv
         end
     end
-
     local conn = nil
     local function hookChar(char)
         if conn then conn:Disconnect() conn = nil end
@@ -2016,14 +1922,12 @@ do
             if child.Parent and getTargetRoot() then startAssist(hrp, child) end
         end)
     end
-
     if localPlayer.Character then task.spawn(hookChar, localPlayer.Character) end
     localPlayer.CharacterAdded:Connect(function(c)
         active = false
         driver = nil
         task.spawn(hookChar, c)
     end)
-
     RunService.Heartbeat:Connect(function()
         if not config.dashAssist then active = false driver = nil return end
         local char = localPlayer.Character
@@ -2045,3 +1949,4 @@ do
         end
         lastH = h
     end)
+end
