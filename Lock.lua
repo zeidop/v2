@@ -18,7 +18,7 @@ local config = {
     menuTransparency = 0, lockPart = "torso", lockKeyName = "L",
     jumpPower = 50, dashForce = 60, jumpBtnSize = 62, dashBtnSize = 62,
     dashMultiplier = 1.5, dashEnabled = true, instantDash = false,
-    antiStun = false,
+    antiStun = false, dashAssist = true,
     lockBtnXScale = 0.75, lockBtnXOffset = 0,
     lockBtnYScale = 0.65, lockBtnYOffset = 0
 }
@@ -83,6 +83,7 @@ local loadBg = Instance.new("Frame")
 loadBg.Size = UDim2.new(1, 0, 1, 0)
 loadBg.BackgroundColor3 = Color3.fromRGB(8, 8, 12)
 loadBg.BorderSizePixel = 0
+loadBg.Active = false
 loadBg.Parent = loadGui
 
 local loadLogo = Instance.new("ImageLabel")
@@ -1027,8 +1028,6 @@ makeDraggable(pickerGui, function() return true end)
 -- ============================================
 -- FUNCIONES ANTI-STUN Y DASH
 -- ============================================
--- CORRECCIÓN CRÍTICA: Usar task.spawn para NO bloquear el hilo principal
--- Esto evita que la pantalla de carga se quede pegada si el personaje tarda en aparecer
 local character = nil
 local humanoid = nil
 local rootPart = nil
@@ -1110,7 +1109,7 @@ local function getClosestPlayer()
             local pl = Players:FindFirstChild(name)
             if pl then
                 local root = valid(pl)
-                if root then
+                if root and myRoot then
                     local d = (root.Position - myRoot.Position).Magnitude
                     if d < bestDist then bestDist = d best = pl end
                 end
@@ -1172,7 +1171,7 @@ end
 lockButton.MouseButton1Click:Connect(toggleLock)
 
 -- ============================================
--- LOOP DE CÁMARA (PREDICT MILIMÉTRICO COMPLETO + SNAP DIRECTO)
+-- LOOP DE CÁMARA (PREDICT MILIMÉTRICO + SNAP DIRECTO)
 -- ============================================
 local lastDeltaTime = 1/60
 
@@ -1202,46 +1201,32 @@ local function cameraLockStep(dt)
     local targetPos = aimPart.Position
     local aimPosition = targetPos
     
-    -- PREDICT MILIMÉTRICO COMPLETO (Con fallback y tope dinámico)
     if config.predictEnabled then
         local dtt = math.max(lastDeltaTime, 0.001)
-        
-        -- 1. Velocidad física real
         local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
         vel = Vector3.new(vel.X, 0, vel.Z)
         
-        -- 2. Fallback: Si la física dice 0 pero se mueve (tween/CFrame)
         if vel.Magnitude < 1 and lastTargetPos then
             local delta = targetPos - lastTargetPos
             vel = Vector3.new(delta.X, 0, delta.Z) / dtt
         end
         
-        -- 3. Clamp anti-glitch
         if vel.Magnitude > 150 then vel = vel.Unit * 150 end
         
-        -- 4. Suavizado mínimo de velocidad (NO es smooth de cámara)
         smoothedVelocity = smoothedVelocity:Lerp(vel, 0.6)
         
-        -- 5. Calcular lead
         if smoothedVelocity.Magnitude >= 1.5 then
             local lead = smoothedVelocity * PREDICT_TIME
-            
-            -- 6. Tope DINÁMICO según distancia (cerca = menos lead, lejos = más)
             local distToTarget = (Camera.CFrame.Position - targetPos).Magnitude
             local dynamicMax = math.clamp(distToTarget * 0.5, 6, 16)
-            if lead.Magnitude > dynamicMax then 
-                lead = lead.Unit * dynamicMax 
-            end
-            
+            if lead.Magnitude > dynamicMax then lead = lead.Unit * dynamicMax end
             aimPosition = targetPos + lead
         end
     end
     
     lastTargetPos = targetPos
     
-    -- CÁMARA DIRECTA (Cero LERP de cámara)
     local targetCFrame = CFrame.new(Camera.CFrame.Position, aimPosition)
-    
     if config.smoothMode then
         local exponential = 1 - math.exp(-config.smoothAmount * 60 * dt)
         Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, math.clamp(exponential, 0.01, 1))
@@ -1265,7 +1250,7 @@ end)
 
 dragBtn.MouseButton1Click:Connect(function()
     config.isDraggable = not config.isDraggable
-    dragBtn.Text = "Arrastrable: " .. (config.isDraggable and "ON" or "OFF")
+    dragBtn.Text = config.isDraggable and "Arrastrable: ON" or "Arrastrable: OFF"
     dragBtn.BackgroundColor3 = config.isDraggable and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
     saveConfig()
 end)
@@ -1545,15 +1530,48 @@ end)
 
 if localPlayer.Character then hookDash() end
 
--- Mostrar menú (CORREGIDO: usa task.delay en vez de delay global)
+-- Mostrar menú
 task.delay(2, function()
     if loadGui and loadGui.Parent then loadGui:Destroy() end
     menuFrame.Visible = true
 end)
 
 -- Aplicar visuales iniciales
-updateNsToggle()
-updateListCounts()
+local function refreshAllVisuals()
+    lockButton.Size = UDim2.new(0, config.buttonSize, 0, config.buttonSize)
+    lockButton.Visible = config.buttonVisible
+    sizeLabel.Text = "Tamano: " .. tostring(config.buttonSize)
+    showBtn.Text = config.buttonVisible and "Boton: Visible" or "Boton: Oculto"
+    showBtn.BackgroundColor3 = config.buttonVisible and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    dragBtn.Text = config.isDraggable and "Arrastrable: ON" or "Arrastrable: OFF"
+    dragBtn.BackgroundColor3 = config.isDraggable and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    predictLabel.Text = string.format("Predict: %.3fs", config.predictAmount)
+    PREDICT_TIME = config.predictAmount
+    predictToggle.Text = config.predictEnabled and "ON" or "OFF"
+    predictToggle.BackgroundColor3 = config.predictEnabled and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    predictLabel.TextColor3 = config.predictEnabled and Color3.fromRGB(255, 220, 130) or Color3.fromRGB(150, 150, 150)
+    dist3DBtn.Text = "Direct 3D: " .. (config.useDistance3D and "ON" or "OFF")
+    dist3DBtn.BackgroundColor3 = config.useDistance3D and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    partBtn.Text = "Parte: " .. (config.lockPart == "head" and "Cabeza" or "Torso")
+    partBtn.BackgroundColor3 = config.lockPart == "head" and Color3.fromRGB(160, 50, 50) or Color3.fromRGB(70, 130, 220)
+    keyBtn.Text = "Tecla: " .. lockKey.Name
+    transBtn.Text = "Transp: " .. math.floor(config.menuTransparency * 100) .. "%"
+    updateNsToggle()
+    updateListCounts()
+    nsJumpLabel.Text = "Jump Power: " .. config.jumpPower
+    nsDashLabel.Text = "Dash Force: " .. config.dashForce
+    nsJumpSizeLabel.Text = "Jump Size: " .. config.jumpBtnSize
+    nsDashSizeLabel.Text = "Dash Size: " .. config.dashBtnSize
+    jumpBtn.Size = UDim2.new(0, config.jumpBtnSize, 0, config.jumpBtnSize)
+    dashFloatBtn.Size = UDim2.new(0, config.dashBtnSize, 0, config.dashBtnSize)
+    dashValueLabel.Text = string.format("Multiplicador: %.1fx", config.dashMultiplier)
+    dashToggleBtn.BackgroundColor3 = config.dashEnabled and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    dashToggleBtn.Text = config.dashEnabled and "ACTIVADO" or "DESACTIVADO"
+    instantDashBtn.Text = config.instantDash and "INSTANT DASH: ON" or "INSTANT DASH: OFF"
+    instantDashBtn.BackgroundColor3 = config.instantDash and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+end
+
+refreshAllVisuals()
 
 -- Autoguardado
 task.spawn(function()
@@ -1587,3 +1605,181 @@ task.spawn(function()
         end
     end
 end)
+
+-- ============================================
+-- DASH ASSIST (CORREGIDO: variable 'c' renombrada a 'cc')
+-- ============================================
+do
+    local STEER_MAX_ANGLE = math.rad(50)
+    local MAX_T = 0.45
+    local STOP_DIST = 3
+    local SPIKE_ON, SPIKE_OFF = 50, 35
+    local WINDOW = 0.35
+
+    if config.dashAssist == nil then config.dashAssist = true end
+
+    local assistBtn = Instance.new("TextButton")
+    assistBtn.Size = UDim2.new(1, 0, 0, 24)
+    assistBtn.Position = UDim2.new(0, 0, 0, 190)
+    assistBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    assistBtn.TextSize = 11
+    assistBtn.Font = Enum.Font.GothamBold
+    assistBtn.BorderSizePixel = 0
+    assistBtn.Parent = dashPage
+    Instance.new("UICorner", assistBtn).CornerRadius = UDim.new(0, 6)
+
+    local function refreshAssistBtn()
+        assistBtn.Text = "DASH ASSIST: " .. (config.dashAssist and "ON" or "OFF")
+        assistBtn.BackgroundColor3 = config.dashAssist and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
+    end
+    refreshAssistBtn()
+    assistBtn.MouseButton1Click:Connect(function()
+        config.dashAssist = not config.dashAssist
+        refreshAssistBtn()
+        saveConfig()
+    end)
+
+    local active = false
+    local driver = nil
+    local origDir = nil
+    local untilT = 0
+    local lastH = 0
+
+    local function usable(c)
+        if c:IsA("BodyVelocity") then return true end
+        if c:IsA("LinearVelocity") then
+            local ok, rel = pcall(function() return c.RelativeTo end)
+            return ok and rel == Enum.ActuatorRelativeTo.World
+        end
+        return false
+    end
+    local function getVel(c) return c:IsA("BodyVelocity") and c.Velocity or c.VectorVelocity end
+    local function setVel(c, v)
+        if c:IsA("BodyVelocity") then c.Velocity = v else c.VectorVelocity = v end
+    end
+    local function findDriver(hrp)
+        for _, c in ipairs(hrp:GetChildren()) do
+            if usable(c) then return c end
+        end
+        return nil
+    end
+
+    local function getTargetRoot()
+        if not targetLock or not lockedPlayer then return nil end
+        local ch = lockedPlayer.Character
+        local r = ch and ch:FindFirstChild("HumanoidRootPart")
+        local h = ch and ch:FindFirstChildOfClass("Humanoid")
+        if r and h and h.Health > 0 then return r end
+        return nil
+    end
+
+    -- CORRECCIÓN: variable 'c' renombrada a 'cc' para evitar conflicto con parámetro
+    local function interceptDir(myPos, tRoot, speed)
+        local r = Vector3.new(tRoot.Position.X - myPos.X, 0, tRoot.Position.Z - myPos.Z)
+        local tv = tRoot.AssemblyLinearVelocity
+        local v = Vector3.new(tv.X, 0, tv.Z)
+        local a = v:Dot(v) - speed * speed
+        local b = 2 * r:Dot(v)
+        local cc = r:Dot(r)  -- ← AQUÍ ESTABA EL BUG: antes era 'c', ahora es 'cc'
+        local t = nil
+        if math.abs(a) < 1e-4 then
+            if b < 0 then t = -cc / b end
+        else
+            local disc = b * b - 4 * a * cc
+            if disc >= 0 then
+                local sq = math.sqrt(disc)
+                local t1, t2 = (-b - sq) / (2 * a), (-b + sq) / (2 * a)
+                if t1 > 0 and t2 > 0 then t = math.min(t1, t2)
+                elseif t1 > 0 then t = t1
+                elseif t2 > 0 then t = t2 end
+            end
+        end
+        t = math.clamp(t or 0, 0, MAX_T)
+        local aim = r + v * t
+        if aim.Magnitude < 0.01 then return nil end
+        return aim.Unit
+    end
+
+    local function startAssist(hrp, drv)
+        if active then
+            if drv and not driver then
+                driver = drv
+                untilT = tick() + 1.5
+            end
+            return
+        end
+        local v = drv and getVel(drv) or hrp.AssemblyLinearVelocity
+        local h = Vector3.new(v.X, 0, v.Z)
+        if h.Magnitude < 10 then return end
+        active = true
+        driver = drv
+        origDir = h.Unit
+        untilT = tick() + (drv and 1.5 or WINDOW)
+    end
+
+    local function steer(hrp)
+        local tRoot = getTargetRoot()
+        if not tRoot or not origDir then return end
+        local cur = (driver and driver.Parent) and getVel(driver) or hrp.AssemblyLinearVelocity
+        local speedH = Vector3.new(cur.X, 0, cur.Z).Magnitude
+        if speedH < 10 then return end
+
+        local toT = Vector3.new(tRoot.Position.X - hrp.Position.X, 0, tRoot.Position.Z - hrp.Position.Z)
+        if toT.Magnitude < STOP_DIST then return end
+
+        local ang = math.acos(math.clamp(origDir:Dot(toT.Unit), -1, 1))
+        if ang > STEER_MAX_ANGLE then return end
+
+        local dir = interceptDir(hrp.Position, tRoot, speedH)
+        if not dir then return end
+        local nv = Vector3.new(dir.X * speedH, cur.Y, dir.Z * speedH)
+        if driver and driver.Parent then
+            setVel(driver, nv)
+        else
+            hrp.AssemblyLinearVelocity = nv
+        end
+    end
+
+    local conn = nil
+    local function hookChar(char)
+        if conn then conn:Disconnect() conn = nil end
+        local hrp = char:WaitForChild("HumanoidRootPart", 5)
+        if not hrp then return end
+        conn = hrp.ChildAdded:Connect(function(child)
+            if not config.dashAssist or not usable(child) then return end
+            RunService.Heartbeat:Wait()
+            RunService.Heartbeat:Wait()
+            if child.Parent and getTargetRoot() then startAssist(hrp, child) end
+        end)
+    end
+    if localPlayer.Character then task.spawn(hookChar, localPlayer.Character) end
+    localPlayer.CharacterAdded:Connect(function(c)
+        active = false
+        driver = nil
+        task.spawn(hookChar, c)
+    end)
+
+    RunService.Heartbeat:Connect(function()
+        if not config.dashAssist then active = false driver = nil return end
+        local char = localPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        local v = hrp.AssemblyLinearVelocity
+        local h = Vector3.new(v.X, 0, v.Z).Magnitude
+
+        if not active then
+            if h > SPIKE_ON and lastH < SPIKE_OFF and getTargetRoot() then
+                startAssist(hrp, findDriver(hrp))
+            end
+        else
+            if (driver and not driver.Parent) or tick() > untilT then
+                active = false
+                driver = nil
+            else
+                steer(hrp)
+            end
+        end
+        lastH = h
+    end)
+end
