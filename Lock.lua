@@ -1611,7 +1611,7 @@ end)
 -- ============================================
 do
     local STEER_MAX_ANGLE = math.rad(50)
-    local MAX_T = 0.45
+    local MAX_T = 0.50
     local STOP_DIST = 3
     local SPIKE_ON, SPIKE_OFF = 50, 35
     local WINDOW = 0.35
