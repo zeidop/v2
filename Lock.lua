@@ -1182,7 +1182,7 @@ lockButton.MouseButton1Click:Connect(toggleLock)
 -- LOOP DE CÁMARA (SIN SUAVIZADO / SIN INTERPOLACIÓN)
 -- ============================================
 local lastDeltaTime = 1/60
-local MAX_LEAD_RATIO = 0.15 -- tope angular del lead (0.15 ≈ 8.5°). Sube si pierdes M1s, baja si fallas habilidades anchas
+local MAX_LEAD_RATIO = 0.20 -- tope angular del lead (0.15 ≈ 8.5°). Sube si pierdes M1s, baja si fallas habilidades anchas
 
 local function cameraLockStep(dt)
     lastDeltaTime = dt or (1/60)
