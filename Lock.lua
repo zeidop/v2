@@ -1151,9 +1151,24 @@ local function getClosestPlayer()
     return closestPlayer
 end
 
+local FACE_TARGET = true
+local faceAimPos = nil
+local prevAutoRotate = nil
+local FACE_BIND_NAME = "ZeidopLockFace"
+
+local function restoreAutoRotate()
+    if prevAutoRotate ~= nil then
+        local h = myHum()
+        if h then h.AutoRotate = prevAutoRotate end
+        prevAutoRotate = nil
+    end
+end
+
 local function resetLock()
     targetLock = false
     lockedPlayer = nil
+    faceAimPos = nil
+    restoreAutoRotate()
     lockButton.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
     lockButton.Text = "LOCK"
     lastTargetPos = nil
@@ -1178,11 +1193,8 @@ end
 
 lockButton.MouseButton1Click:Connect(toggleLock)
 
--- ============================================
--- LOOP DE CÁMARA (SIN SUAVIZADO / SIN INTERPOLACIÓN)
--- ============================================
 local lastDeltaTime = 1/60
-local MAX_LEAD_RATIO = 0.20 -- tope angular del lead (0.15 ≈ 8.5°). Sube si pierdes M1s, baja si fallas habilidades anchas
+local MAX_LEAD_RATIO = 0.20
 
 local function cameraLockStep(dt)
     lastDeltaTime = dt or (1/60)
@@ -1212,24 +1224,17 @@ local function cameraLockStep(dt)
 
     if config.predictEnabled then
         local dtt = math.max(lastDeltaTime, 0.001)
-
-        -- 1. Velocidad física real (horizontal)
         local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
         vel = Vector3.new(vel.X, 0, vel.Z)
 
-        -- 2. Fallback: si la física dice 0 pero se mueve (tween/CFrame)
         if vel.Magnitude < 1 and lastTargetPos then
             local delta = targetPos - lastTargetPos
             vel = Vector3.new(delta.X, 0, delta.Z) / dtt
         end
 
-        -- 3. Clamp anti-glitch
         if vel.Magnitude > 150 then vel = vel.Unit * 150 end
-
-        -- 4. SIN interpolación: velocidad cruda de este frame
         smoothedVelocity = vel
 
-        -- 5. Lead solo en el componente lateral + tope angular duro
         if vel.Magnitude >= 1.5 then
             local toTarget = targetPos - Camera.CFrame.Position
             local dist = toTarget.Magnitude
@@ -1249,9 +1254,8 @@ local function cameraLockStep(dt)
     end
 
     lastTargetPos = targetPos
+    faceAimPos = aimPosition
 
-    -- Vista "Above": solo sube la posición de la cámara (altura absoluta sobre tu personaje,
-    -- sin acumularse) y solo si el objetivo está en la blacklist. No toca el apuntado ni el lead.
     local camPos = Camera.CFrame.Position
     if config.aboveView and #blacklist > 0 and inList(blacklist, lockedPlayer.Name) then
         local mr = myRoot()
@@ -1261,12 +1265,29 @@ local function cameraLockStep(dt)
         end
     end
 
-    -- CÁMARA DIRECTA: cero LERP, cero smoothMode
     Camera.CFrame = CFrame.new(camPos, aimPosition)
 end
 
--- Prioridad "Last": el lock escribe la cámara al final del frame y nada la sobreescribe después.
--- Si la cámara se siente rara, vuelve a: Enum.RenderPriority.Camera.Value + 1
+local function faceStep()
+    if not FACE_TARGET or not targetLock or not faceAimPos then return end
+    local mr, mh = myRoot(), myHum()
+    if not mr or not mh or mh.Health <= 0 or mh.PlatformStand or mh.Sit then return end
+
+    if prevAutoRotate == nil then
+        prevAutoRotate = mh.AutoRotate
+        mh.AutoRotate = false
+    end
+
+    local p = mr.Position
+    local flat = Vector3.new(faceAimPos.X - p.X, 0, faceAimPos.Z - p.Z)
+    if flat.Magnitude > 0.5 then
+        mr.CFrame = CFrame.new(p, p + flat)
+    end
+end
+
+pcall(function() RunService:UnbindFromRenderStep(FACE_BIND_NAME) end)
+RunService:BindToRenderStep(FACE_BIND_NAME, Enum.RenderPriority.Last.Value, faceStep)
+
 RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
 
 -- ============================================
