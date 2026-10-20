@@ -1164,11 +1164,14 @@ local function restoreAutoRotate()
     end
 end
 
+local FACE_TARGET = true
+local faceAimPos = nil
+local FACE_BIND_NAME = "ZeidopLockFace"
+
 local function resetLock()
     targetLock = false
     lockedPlayer = nil
     faceAimPos = nil
-    restoreAutoRotate()
     lockButton.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
     lockButton.Text = "LOCK"
     lastTargetPos = nil
@@ -1256,13 +1259,26 @@ local function cameraLockStep(dt)
     lastTargetPos = targetPos
     faceAimPos = aimPosition
 
+    -- Cámara siempre DETRÁS de tu personaje, en línea con el objetivo
     local camPos = Camera.CFrame.Position
-    if config.aboveView and #blacklist > 0 and inList(blacklist, lockedPlayer.Name) then
-        local mr = myRoot()
-        if mr then
-            local y = math.max(camPos.Y, mr.Position.Y + config.aboveHeight)
-            camPos = Vector3.new(camPos.X, y, camPos.Z)
+    local mr = myRoot()
+    if FACE_TARGET and mr then
+        local focus = Camera.Focus.Position
+        if (focus - mr.Position).Magnitude > 25 then
+            focus = mr.Position + Vector3.new(0, 2, 0)
         end
+        local offset = camPos - focus
+        local rh = Vector3.new(offset.X, 0, offset.Z).Magnitude
+        local flat = Vector3.new(aimPosition.X - mr.Position.X, 0, aimPosition.Z - mr.Position.Z)
+        if rh > 1 and flat.Magnitude > 0.5 then
+            camPos = focus - flat.Unit * rh + Vector3.new(0, offset.Y, 0)
+        end
+    end
+
+    -- Vista "Above" (solo blacklist, solo visual)
+    if config.aboveView and mr and #blacklist > 0 and inList(blacklist, lockedPlayer.Name) then
+        local y = math.max(camPos.Y, mr.Position.Y + config.aboveHeight)
+        camPos = Vector3.new(camPos.X, y, camPos.Z)
     end
 
     Camera.CFrame = CFrame.new(camPos, aimPosition)
@@ -1272,11 +1288,6 @@ local function faceStep()
     if not FACE_TARGET or not targetLock or not faceAimPos then return end
     local mr, mh = myRoot(), myHum()
     if not mr or not mh or mh.Health <= 0 or mh.PlatformStand or mh.Sit then return end
-
-    if prevAutoRotate == nil then
-        prevAutoRotate = mh.AutoRotate
-        mh.AutoRotate = false
-    end
 
     local p = mr.Position
     local flat = Vector3.new(faceAimPos.X - p.X, 0, faceAimPos.Z - p.Z)
@@ -1289,7 +1300,6 @@ pcall(function() RunService:UnbindFromRenderStep(FACE_BIND_NAME) end)
 RunService:BindToRenderStep(FACE_BIND_NAME, Enum.RenderPriority.Last.Value, faceStep)
 
 RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
-
 -- ============================================
 -- EVENTOS DEL MENÚ LOCK
 -- ============================================
