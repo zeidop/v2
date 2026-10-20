@@ -1267,7 +1267,7 @@ end
 
 -- Prioridad "Last": el lock escribe la cámara al final del frame y nada la sobreescribe después.
 -- Si la cámara se siente rara, vuelve a: Enum.RenderPriority.Camera.Value + 1
-RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Last.Value, cameraLockStep)
+RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
 
 -- ============================================
 -- EVENTOS DEL MENÚ LOCK
