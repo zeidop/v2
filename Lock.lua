@@ -1197,7 +1197,7 @@ end
 lockButton.MouseButton1Click:Connect(toggleLock)
 
 local lastDeltaTime = 1/60
-local MAX_LEAD_RATIO = 0.20
+local MAX_LEAD_RATIO = 0.35
 
 local function cameraLockStep(dt)
     lastDeltaTime = dt or (1/60)
