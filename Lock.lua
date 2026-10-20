@@ -1497,6 +1497,7 @@ end)
 -- ============================================
 -- HEARTBEAT INSTANT DASH
 -- ============================================
+local lastInstant = 0
 RunService.Heartbeat:Connect(function()
     if not config.instantDash then return end
     local char = localPlayer.Character
@@ -1507,11 +1508,13 @@ RunService.Heartbeat:Connect(function()
     local currentVel = hrp.AssemblyLinearVelocity
     local horizontalVel = Vector3.new(currentVel.X, 0, currentVel.Z)
     
-    if horizontalVel.Magnitude > 65 and instantDashLastVel.Magnitude < 50 then
+    if horizontalVel.Magnitude > 45
+   and horizontalVel.Magnitude - instantDashLastVel.Magnitude > 20
+   and tick() - lastInstant > 0.35 then
+    lastInstant = tick()
         local dir = horizontalVel.Unit
         pcall(function()
-            hrp.CFrame = hrp.CFrame + dir * (18 * 0.6)
-            hrp.AssemblyLinearVelocity = dir * 140
+            hrp.CFrame = hrp.CFrame + dir * (18 * 0.3)
         end)
     end
     instantDashLastVel = horizontalVel
