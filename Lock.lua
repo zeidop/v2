@@ -1323,38 +1323,9 @@ local function cameraLockStep(dt)
     local aimPosition = targetPos
 
     if config.predictEnabled then
-        local dtt = math.max(lastDeltaTime, 0.001)
-        local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
-        vel = Vector3.new(vel.X, 0, vel.Z)
-
-        if vel.Magnitude < 1 and lastTargetPos then
-            local delta = targetPos - lastTargetPos
-            vel = Vector3.new(delta.X, 0, delta.Z) / dtt
-        end
-
-        if vel.Magnitude > 150 then vel = vel.Unit * 150 end
-        smoothedVelocity = vel
-
-        if vel.Magnitude >= 1.5 then
-            local toTarget = targetPos - Camera.CFrame.Position
-            local dist = toTarget.Magnitude
-            if dist > 0.1 then
-                local dir = toTarget.Unit
-                local velPerp = vel - dir * vel:Dot(dir)
-                local lead = velPerp * PREDICT_TIME
-
-                local maxLead = math.min(dist * MAX_LEAD_RATIO, 16)
-                if lead.Magnitude > maxLead then
-                    lead = lead.Unit * maxLead
-                end
-
-                aimPosition = targetPos + lead
-            end
-        end
-    end
-
-    lastTargetPos = targetPos
-    lockAimPos = aimPosition
+            
+lastTargetPos = targetPos
+    faceAimPos = aimPosition
 
     local camPos = Camera.CFrame.Position
     local look = aimPosition - camPos
@@ -1376,6 +1347,7 @@ local function cameraLockStep(dt)
 end
 
 local function faceStep()
+            
     if not FACE_TARGET or not targetLock or not lockAimPos then return end
     local cam = workspace.CurrentCamera
     local mr, mh = myRoot(), myHum()
