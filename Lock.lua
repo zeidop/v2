@@ -1260,38 +1260,131 @@ local function cameraLockStep(dt)
     faceAimPos = aimPosition
 
     -- Cámara siempre DETRÁS de tu personaje, en línea con el objetivo
+local FACE_TARGET = true
+local SWIPE_MODE = true
+local lockAimPos = nil
+local FACE_BIND_NAME = "ZeidopLockFace"
+
+local function resetLock()
+    targetLock = false
+    lockedPlayer = nil
+    lockAimPos = nil
+    lockButton.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+    lockButton.Text = "LOCK"
+    lastTargetPos = nil
+    smoothedVelocity = Vector3.new(0, 0, 0)
+end
+
+local function toggleLock()
+    if not targetLock then
+        local closest = getClosestPlayer()
+        if closest then
+            lockedPlayer = closest
+            targetLock = true
+            lockButton.BackgroundColor3 = Color3.fromRGB(45, 170, 70)
+            lockButton.Text = "ON"
+            lastTargetPos = nil
+            smoothedVelocity = Vector3.new(0, 0, 0)
+        end
+    else
+        resetLock()
+    end
+end
+
+lockButton.MouseButton1Click:Connect(toggleLock)
+
+local lastDeltaTime = 1/60
+local MAX_LEAD_RATIO = 0.20
+
+local function cameraLockStep(dt)
+    lastDeltaTime = dt or (1/60)
+    if not targetLock or not lockedPlayer or not lockedPlayer.Character then return end
+
+    if inList(whitelist, lockedPlayer.Name) then resetLock() return end
+    if #blacklist > 0 and not inList(blacklist, lockedPlayer.Name) then
+        local b = getClosestPlayer()
+        if b then lockedPlayer = b else resetLock() return end
+    end
+
+    Camera = workspace.CurrentCamera
+    if not Camera then return end
+
+    local root = lockedPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local hum = lockedPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then resetLock() return end
+
+    local aimPart = root
+    if config.lockPart == "head" then
+        local head = lockedPlayer.Character:FindFirstChild("Head")
+        if head then aimPart = head end
+    end
+
+    local targetPos = aimPart.Position
+    local aimPosition = targetPos
+
+    if config.predictEnabled then
+        local dtt = math.max(lastDeltaTime, 0.001)
+        local vel = root.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
+        vel = Vector3.new(vel.X, 0, vel.Z)
+
+        if vel.Magnitude < 1 and lastTargetPos then
+            local delta = targetPos - lastTargetPos
+            vel = Vector3.new(delta.X, 0, delta.Z) / dtt
+        end
+
+        if vel.Magnitude > 150 then vel = vel.Unit * 150 end
+        smoothedVelocity = vel
+
+        if vel.Magnitude >= 1.5 then
+            local toTarget = targetPos - Camera.CFrame.Position
+            local dist = toTarget.Magnitude
+            if dist > 0.1 then
+                local dir = toTarget.Unit
+                local velPerp = vel - dir * vel:Dot(dir)
+                local lead = velPerp * PREDICT_TIME
+
+                local maxLead = math.min(dist * MAX_LEAD_RATIO, 16)
+                if lead.Magnitude > maxLead then
+                    lead = lead.Unit * maxLead
+                end
+
+                aimPosition = targetPos + lead
+            end
+        end
+    end
+
+    lastTargetPos = targetPos
+    lockAimPos = aimPosition
+
     local camPos = Camera.CFrame.Position
-    local mr = myRoot()
-    if FACE_TARGET and mr then
-        local focus = Camera.Focus.Position
-        if (focus - mr.Position).Magnitude > 25 then
-            focus = mr.Position + Vector3.new(0, 2, 0)
-        end
-        local offset = camPos - focus
-        local rh = Vector3.new(offset.X, 0, offset.Z).Magnitude
-        local flat = Vector3.new(aimPosition.X - mr.Position.X, 0, aimPosition.Z - mr.Position.Z)
-        if rh > 1 and flat.Magnitude > 0.5 then
-            camPos = focus - flat.Unit * rh + Vector3.new(0, offset.Y, 0)
+    local look = aimPosition - camPos
+    if look.Magnitude < 0.1 then return end
+    look = look.Unit
+
+    -- Vista "Above": inclina la cámara hacia abajo (la cifra de "Altura" ahora son grados)
+    if config.aboveView and #blacklist > 0 and inList(blacklist, lockedPlayer.Name) then
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude > 0.01 then
+            local fu = flat.Unit
+            local pitch = math.atan2(look.Y, flat.Magnitude) - math.rad(config.aboveHeight)
+            pitch = math.clamp(pitch, -math.rad(80), math.rad(80))
+            look = Vector3.new(fu.X * math.cos(pitch), math.sin(pitch), fu.Z * math.cos(pitch))
         end
     end
 
-    -- Vista "Above" (solo blacklist, solo visual)
-    if config.aboveView and mr and #blacklist > 0 and inList(blacklist, lockedPlayer.Name) then
-        local y = math.max(camPos.Y, mr.Position.Y + config.aboveHeight)
-        camPos = Vector3.new(camPos.X, y, camPos.Z)
-    end
-
-    Camera.CFrame = CFrame.new(camPos, aimPosition)
+    Camera.CFrame = CFrame.new(camPos, camPos + look)
 end
 
 local function faceStep()
-    if not FACE_TARGET or not targetLock or not faceAimPos then return end
+    if not FACE_TARGET or not targetLock or not lockAimPos then return end
+    local cam = workspace.CurrentCamera
     local mr, mh = myRoot(), myHum()
-    if not mr or not mh or mh.Health <= 0 or mh.PlatformStand or mh.Sit then return end
+    if not cam or not mr or not mh or mh.Health <= 0 or mh.PlatformStand or mh.Sit then return end
 
-    local p = mr.Position
-    local flat = Vector3.new(faceAimPos.X - p.X, 0, faceAimPos.Z - p.Z)
-    if flat.Magnitude > 0.5 then
+    local look = cam.CFrame.LookVector
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude > 0.05 then
+        local p = mr.Position
         mr.CFrame = CFrame.new(p, p + flat)
     end
 end
@@ -1299,7 +1392,8 @@ end
 pcall(function() RunService:UnbindFromRenderStep(FACE_BIND_NAME) end)
 RunService:BindToRenderStep(FACE_BIND_NAME, Enum.RenderPriority.Last.Value, faceStep)
 
-RunService:BindToRenderStep(CAMERA_LOCK_NAME, Enum.RenderPriority.Camera.Value + 1, cameraLockStep)
+local CAM_PRIORITY = SWIPE_MODE and (Enum.RenderPriority.Camera.Value - 1) or (Enum.RenderPriority.Camera.Value + 1)
+RunService:BindToRenderStep(CAMERA_LOCK_NAME, CAM_PRIORITY, cameraLockStep)
 -- ============================================
 -- EVENTOS DEL MENÚ LOCK
 -- ============================================
