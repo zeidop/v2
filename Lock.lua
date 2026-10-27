@@ -23,7 +23,8 @@ local config = {
     assistSpikeOn = 50, assistSpikeOff = 35, assistWindow = 0.35, assistLag = 0.06,
     aboveView = false, aboveHeight = 12,
     lockBtnXScale = 0.75, lockBtnXOffset = 0,
-    lockBtnYScale = 0.65, lockBtnYOffset = 0
+    lockBtnYScale = 0.65, lockBtnYOffset = 0,
+    lockFree = false
 }
 
 local function loadConfig()
@@ -348,6 +349,9 @@ local keyBtn = halfBtn("Tecla: " .. lockKey.Name, 132, true, Color3.fromRGB(70, 
 
 local aboveBtn = halfBtn("Above: " .. (config.aboveView and "ON" or "OFF"), 162, false, config.aboveView and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50))
 local aboveHeightBtn = halfBtn("Altura: " .. config.aboveHeight, 162, true, Color3.fromRGB(70, 130, 220))
+
+-- BOTÓN MODO NORMAL / LIBRE
+local modeBtn = halfBtn("Modo: " .. (config.lockFree and "LIBRE" or "NORMAL"), 192, false, config.lockFree and Color3.fromRGB(80, 60, 140) or Color3.fromRGB(70, 130, 220))
 
 -- ============================================
 -- PÁGINA STUN
@@ -1034,8 +1038,6 @@ makeDraggable(pickerGui, function() return true end)
 -- ============================================
 -- FUNCIONES ANTI-STUN Y DASH
 -- ============================================
--- CORRECCIÓN CRÍTICA: Usar task.spawn para NO bloquear el hilo principal
--- Esto evita que la pantalla de carga se quede pegada si el personaje tarda en aparecer
 local character = nil
 local humanoid = nil
 local rootPart = nil
@@ -1246,6 +1248,10 @@ local function cameraLockStep(dt)
     lastTargetPos = targetPos
     lockAimPos = aimPosition
 
+    -- MODO LIBRE: no tocar la cámara, solo actualizar lockAimPos
+    if config.lockFree then return end
+
+    -- MODO NORMAL: mover la cámara hacia el objetivo
     local camPos = Camera.CFrame.Position
     local look = aimPosition - camPos
     if look.Magnitude < 0.1 then return end
@@ -1266,15 +1272,27 @@ end
 
 local function faceStep()
     if not FACE_TARGET or not targetLock or not lockAimPos then return end
-    local cam = workspace.CurrentCamera
     local mr, mh = myRoot(), myHum()
-    if not cam or not mr or not mh or mh.Health <= 0 or mh.PlatformStand or mh.Sit then return end
+    if not mr or not mh or mh.Health <= 0 or mh.PlatformStand or mh.Sit then return end
 
-    local look = cam.CFrame.LookVector
-    local flat = Vector3.new(look.X, 0, look.Z)
-    if flat.Magnitude > 0.05 then
-        local p = mr.Position
-        mr.CFrame = CFrame.new(p, p + flat)
+    local p = mr.Position
+
+    if config.lockFree then
+        -- MODO LIBRE: girar el personaje directamente hacia el objetivo
+        local d = lockAimPos - p
+        local flat = Vector3.new(d.X, 0, d.Z)
+        if flat.Magnitude > 0.05 then
+            mr.CFrame = CFrame.new(p, p + flat)
+        end
+    else
+        -- MODO NORMAL: girar el personaje hacia donde mira la cámara
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local look = cam.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude > 0.05 then
+            mr.CFrame = CFrame.new(p, p + flat)
+        end
     end
 end
 
@@ -1283,6 +1301,7 @@ RunService:BindToRenderStep(FACE_BIND_NAME, Enum.RenderPriority.Last.Value, face
 
 local CAM_PRIORITY = (Enum.RenderPriority.Camera.Value - 1)
 RunService:BindToRenderStep(CAMERA_LOCK_NAME, CAM_PRIORITY, cameraLockStep)
+
 -- ============================================
 -- EVENTOS DEL MENÚ LOCK
 -- ============================================
@@ -1381,6 +1400,13 @@ aboveHeightBtn.MouseButton1Click:Connect(function()
     if h > 24 then h = 6 end
     config.aboveHeight = h
     aboveHeightBtn.Text = "Altura: " .. h
+    saveConfig()
+end)
+
+modeBtn.MouseButton1Click:Connect(function()
+    config.lockFree = not config.lockFree
+    modeBtn.Text = "Modo: " .. (config.lockFree and "LIBRE" or "NORMAL")
+    modeBtn.BackgroundColor3 = config.lockFree and Color3.fromRGB(80, 60, 140) or Color3.fromRGB(70, 130, 220)
     saveConfig()
 end)
 
@@ -1594,13 +1620,13 @@ end)
 
 if localPlayer.Character then hookDash() end
 
--- Mostrar menú (CORREGIDO: usa task.delay en vez de delay global)
+-- Mostrar menú
 task.delay(2, function()
     if loadGui and loadGui.Parent then loadGui:Destroy() end
     menuFrame.Visible = true
 end)
 
--- Aplicar visuales iniciales (sincroniza la interfaz con la config guardada)
+-- Aplicar visuales iniciales
 local function refreshAllVisuals()
     lockButton.Size = UDim2.new(0, config.buttonSize, 0, config.buttonSize)
     lockButton.Visible = config.buttonVisible
@@ -1623,6 +1649,8 @@ local function refreshAllVisuals()
     aboveBtn.Text = "Above: " .. (config.aboveView and "ON" or "OFF")
     aboveBtn.BackgroundColor3 = config.aboveView and Color3.fromRGB(45, 160, 70) or Color3.fromRGB(160, 50, 50)
     aboveHeightBtn.Text = "Altura: " .. config.aboveHeight
+    modeBtn.Text = "Modo: " .. (config.lockFree and "LIBRE" or "NORMAL")
+    modeBtn.BackgroundColor3 = config.lockFree and Color3.fromRGB(80, 60, 140) or Color3.fromRGB(70, 130, 220)
     updateNsToggle()
     updateListCounts()
     nsJumpLabel.Text = "Jump Power: " .. config.jumpPower
@@ -1676,8 +1704,6 @@ end)
 
 -- ============================================
 -- DASH ASSIST (CON MENÚ DE CONFIGURACIÓN)
--- Corrige la dirección del dash hacia donde estará el enemigo.
--- Solo actúa con el LOCK activo y si tu dash ya iba hacia él.
 -- ============================================
 do
     local STEER_MAX_ANGLE = math.rad(config.assistAngle or 50)
@@ -1686,12 +1712,11 @@ do
     local SPIKE_ON = config.assistSpikeOn or 50
     local SPIKE_OFF = config.assistSpikeOff or 35
     local WINDOW = config.assistWindow or 0.35
-    local LAG = config.assistLag or 0.06   -- compensación de ping (s): el enemigo que ves va atrasado
-    local SPIKE_JUMP = 25                  -- salto de velocidad que cuenta como dash (dashes encadenados)
+    local LAG = config.assistLag or 0.06
+    local SPIKE_JUMP = 25
 
     if config.dashAssist == nil then config.dashAssist = true end
 
-    -- Botón principal
     local assistBtn = Instance.new("TextButton")
     assistBtn.Size = UDim2.new(0.75, 0, 0, 24)
     assistBtn.Position = UDim2.new(0, 0, 0, 190)
@@ -1702,7 +1727,6 @@ do
     assistBtn.Parent = dashPage
     Instance.new("UICorner", assistBtn).CornerRadius = UDim.new(0, 6)
 
-    -- Botón de configuración
     local gearBtn = Instance.new("TextButton")
     gearBtn.Size = UDim2.new(0.23, 0, 0, 24)
     gearBtn.Position = UDim2.new(0.77, 0, 0, 190)
@@ -1727,7 +1751,6 @@ do
         saveConfig()
     end)
 
-    -- Menú flotante de configuración
     local assistSettingsGui = Instance.new("Frame")
     assistSettingsGui.Name = "AssistSettings"
     assistSettingsGui.Size = UDim2.new(0, 180, 0, 230)
@@ -1889,16 +1912,13 @@ do
         assistSettingsGui.Visible = false
     end)
 
-    -- ============================================
-    -- Lógica interna del Dash Assist
-    -- ============================================
     local active = false
-    local driver = nil      -- BodyVelocity / LinearVelocity del dash (si existe)
-    local origDir = nil     -- dirección original de tu dash
+    local driver = nil
+    local origDir = nil
     local untilT = 0
     local lastH = 0
     local tPrevRoot, tPrevPos = nil, nil
-    local estVel = Vector3.new(0, 0, 0) -- velocidad estimada por cambio de posición (respaldo)
+    local estVel = Vector3.new(0, 0, 0)
 
     local function usable(c)
         if c:IsA("BodyVelocity") then return true end
@@ -1928,17 +1948,14 @@ do
         return nil
     end
 
-    -- Dirección de intercepción: donde estará el enemigo cuando llegues a él
     local function interceptDir(myPos, tRoot, speed)
         local r = Vector3.new(tRoot.Position.X - myPos.X, 0, tRoot.Position.Z - myPos.Z)
         local tv = tRoot.AssemblyLinearVelocity
         local v = Vector3.new(tv.X, 0, tv.Z)
 
-        -- Respaldo: si la física dice ~0 pero se mueve (CFrame/tween), usa la velocidad por posición
         if v.Magnitude < 1 and tPrevRoot == tRoot then v = estVel end
         if v.Magnitude > 150 then v = v.Unit * 150 end
 
-        -- Compensación de ping: el enemigo real ya va adelante de lo que ves
         r = r + v * LAG
 
         local a = v:Dot(v) - speed * speed
@@ -1990,7 +2007,6 @@ do
         local toT = Vector3.new(tRoot.Position.X - hrp.Position.X, 0, tRoot.Position.Z - hrp.Position.Z)
         if toT.Magnitude < STOP_DIST then return end
 
-        -- Solo corrige si tu dash ya iba (más o menos) hacia el enemigo
         local ang = math.acos(math.clamp(origDir:Dot(toT.Unit), -1, 1))
         if ang > STEER_MAX_ANGLE then return end
 
@@ -2004,7 +2020,6 @@ do
         end
     end
 
-    -- Detección principal: BodyVelocity / LinearVelocity que aparece en tu HumanoidRootPart
     local conn = nil
     local function hookChar(char)
         if conn then conn:Disconnect() conn = nil end
@@ -2013,7 +2028,7 @@ do
         conn = hrp.ChildAdded:Connect(function(child)
             if not config.dashAssist or not usable(child) then return end
             RunService.Heartbeat:Wait()
-            RunService.Heartbeat:Wait() -- espera a que el juego (y tu multiplicador) fijen la velocidad
+            RunService.Heartbeat:Wait()
             if child.Parent and getTargetRoot() then startAssist(hrp, child) end
         end)
     end
@@ -2024,9 +2039,7 @@ do
         task.spawn(hookChar, c)
     end)
 
-    -- Loop: velocidad de respaldo del enemigo + corrección + detección por pico de velocidad
     RunService.Heartbeat:Connect(function(dt)
-        -- Velocidad estimada por posición del objetivo lockeado
         local tr = getTargetRoot()
         if tr then
             local p = tr.Position
@@ -2064,4 +2077,432 @@ do
         end
         lastH = h
     end)
+end
+
+-- ============================================
+-- SKIN VISUAL (SOLO INTERFAZ - no cambia ninguna logica ni funcion)
+-- Pegar al FINAL del hub. Para quitarlo: borra este bloque completo.
+-- ============================================
+do
+    local R = {
+        screenGui = screenGui, menuFrame = menuFrame, menuStroke = menuStroke,
+        titleBar = titleBar, titleFix = titleFix, titleLogo = titleLogo, titleLabel = titleLabel,
+        minBtn = minBtn, accentLine = accentLine, tabBar = tabBar, miniMenuBtn = miniMenuBtn,
+        tabLock = tabLock, tabNoStun = tabNoStun, tabDash = tabDash, tabList = tabList,
+        lockPage = lockPage, showBtn = showBtn, dragBtn = dragBtn, sizeLabel = sizeLabel,
+        sizeMinus = sizeMinus, sizePlus = sizePlus, predictLabel = predictLabel,
+        predictMinus = predictMinus, predictPlus = predictPlus, predictToggle = predictToggle,
+        dist3DBtn = dist3DBtn, transBtn = transBtn, aimSep = aimSep, partBtn = partBtn,
+        keyBtn = keyBtn, aboveBtn = aboveBtn, aboveHeightBtn = aboveHeightBtn, modeBtn = modeBtn,
+        noStunPage = noStunPage, nsToggleBtn = nsToggleBtn, nsJumpLabel = nsJumpLabel,
+        nsJumpMinus = nsJumpMinus, nsJumpPlus = nsJumpPlus, nsJumpGenBtn = nsJumpGenBtn,
+        nsDashLabel = nsDashLabel, nsDashMinus = nsDashMinus, nsDashPlus = nsDashPlus,
+        nsDashGenBtn = nsDashGenBtn, nsJumpSizeLabel = nsJumpSizeLabel,
+        nsJumpSizeMinus = nsJumpSizeMinus, nsJumpSizePlus = nsJumpSizePlus,
+        nsDashSizeLabel = nsDashSizeLabel, nsDashSizeMinus = nsDashSizeMinus,
+        nsDashSizePlus = nsDashSizePlus, nsLockBtn = nsLockBtn, nsInfoLabel = nsInfoLabel,
+        dashPage = dashPage, dashTitle = dashTitle, dashValueLabel = dashValueLabel,
+        dashMinusBtn = dashMinusBtn, dashPlusBtn = dashPlusBtn, dashToggleBtn = dashToggleBtn,
+        instantDashBtn = instantDashBtn, dashDesc = dashDesc,
+        listPage = listPage, wlBtn = wlBtn, blBtn = blBtn, listHint = listHint,
+        imanBtn = imanBtn, lungeBtn = lungeBtn, fuerzaBtn = fuerzaBtn,
+        pickerGui = pickerGui, pickerStroke = pickerStroke, pickerTitle = pickerTitle,
+        pickerClose = pickerClose, pickerLayout = pickerLayout,
+        lockButton = lockButton, lockStroke = lockStroke, jumpBtn = jumpBtn, jbStroke = jbStroke,
+        dashFloatBtn = dashFloatBtn, dfStroke = dfStroke,
+    }
+
+    local ok, err = pcall(function()
+        local C_BG = Color3.fromRGB(14, 14, 20)
+        local C_CARD = Color3.fromRGB(23, 23, 33)
+        local C_LINE = Color3.fromRGB(48, 48, 68)
+        local C_ACC = Color3.fromRGB(160, 120, 255)
+        local WHITE = Color3.fromRGB(255, 255, 255)
+        local RH, PAD, GAP = 32, 8, 8
+        local FB = Enum.Font.GothamBold
+        local H = {}
+
+        local function step(name, fn)
+            local s, e = pcall(fn)
+            if not s then warn("[zeidop skin] " .. name .. ": " .. tostring(e)) end
+        end
+        local function corner(o, r)
+            local c = o:FindFirstChildOfClass("UICorner")
+            if not c then
+                c = Instance.new("UICorner")
+                c.Parent = o
+            end
+            c.CornerRadius = UDim.new(0, r)
+        end
+        local function stroke(o, col, tr, th)
+            local s = Instance.new("UIStroke")
+            s.Color = col
+            s.Transparency = tr
+            s.Thickness = th
+            s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+            s.Parent = o
+            return s
+        end
+        local function grad(o, c0, c1, rot)
+            local g = Instance.new("UIGradient")
+            g.Color = ColorSequence.new(c0, c1)
+            g.Rotation = rot
+            g.Parent = o
+        end
+        -- estilo comun de boton (los colores de estado ON/OFF los sigue manejando tu logica)
+        local function btn(o, size)
+            corner(o, 8)
+            grad(o, WHITE, Color3.fromRGB(205, 205, 205), 90)
+            stroke(o, WHITE, 0.86, 1)
+            o.Font = FB
+            o.TextSize = size
+            o.ZIndex = 2
+        end
+        -- rejilla: media fila, fila completa, columnas desde la derecha, etiqueta
+        local function half(o, right, y)
+            o.Position = UDim2.new(right and 0.5 or 0, right and 4 or 8, 0, y)
+            o.Size = UDim2.new(0.5, -12, 0, RH)
+        end
+        local function full(o, y)
+            o.Position = UDim2.new(0, 8, 0, y)
+            o.Size = UDim2.new(1, -16, 0, RH)
+        end
+        local function col(o, n, y)
+            o.Position = UDim2.new(1, -(4 + 48 * n), 0, y)
+            o.Size = UDim2.new(0, 44, 0, RH)
+        end
+        local function lab(o, n, y, size)
+            o.Position = UDim2.new(0, 10, 0, y)
+            o.Size = UDim2.new(1, -(20 + 48 * n), 0, RH)
+            o.TextSize = size
+            o.TextXAlignment = Enum.TextXAlignment.Left
+            o.TextYAlignment = Enum.TextYAlignment.Center
+            o.ZIndex = 2
+        end
+        local function header(page, cur, text)
+            local l = Instance.new("TextLabel")
+            l.BackgroundTransparency = 1
+            l.Text = text
+            l.Font = FB
+            l.TextSize = 11
+            l.TextColor3 = C_ACC
+            l.TextXAlignment = Enum.TextXAlignment.Left
+            l.Position = UDim2.new(0, 6, 0, cur.y)
+            l.Size = UDim2.new(1, -12, 0, 14)
+            l.ZIndex = 2
+            l.Parent = page
+            cur.y = cur.y + 18
+        end
+        local function card(page, cur, rows)
+            local h = PAD * 2 + rows * RH + (rows - 1) * GAP
+            local c = Instance.new("Frame")
+            c.BackgroundColor3 = C_CARD
+            c.BorderSizePixel = 0
+            c.Position = UDim2.new(0, 0, 0, cur.y)
+            c.Size = UDim2.new(1, 0, 0, h)
+            c.ZIndex = 1
+            c.Parent = page
+            corner(c, 10)
+            stroke(c, C_LINE, 0.2, 1)
+            local top = cur.y + PAD
+            cur.y = cur.y + h + 14
+            return top
+        end
+        local function rowY(top, i) return top + (i - 1) * (RH + GAP) end
+
+        -- ===== MENU, TITULO Y PESTANAS LATERALES =====
+        step("menu", function()
+            local m = R.menuFrame
+            m.Size = UDim2.new(0, 400, 0, 300)
+            m.Position = UDim2.new(0.02, 0, 0.06, 0)
+            m.BackgroundColor3 = C_BG
+            corner(m, 14)
+            R.menuStroke.Color = Color3.fromRGB(110, 80, 210)
+            R.menuStroke.Thickness = 2
+            R.miniMenuBtn.Position = m.Position
+
+            R.titleBar.Size = UDim2.new(1, 0, 0, 40)
+            R.titleBar.BackgroundColor3 = WHITE
+            R.titleFix.BackgroundColor3 = WHITE
+            corner(R.titleBar, 14)
+            grad(R.titleBar, Color3.fromRGB(64, 46, 124), Color3.fromRGB(24, 24, 36), 0)
+            grad(R.titleFix, Color3.fromRGB(64, 46, 124), Color3.fromRGB(24, 24, 36), 0)
+            R.titleLogo.Size = UDim2.new(0, 28, 0, 28)
+            R.titleLogo.Position = UDim2.new(0, 10, 0, 6)
+            R.titleLabel.Position = UDim2.new(0, 46, 0, 0)
+            R.titleLabel.Size = UDim2.new(1, -96, 1, 0)
+            R.titleLabel.TextSize = 18
+            R.titleLabel.Font = Enum.Font.GothamBlack
+            R.minBtn.Size = UDim2.new(0, 28, 0, 28)
+            R.minBtn.Position = UDim2.new(1, -38, 0, 6)
+            btn(R.minBtn, 18)
+            R.accentLine.Position = UDim2.new(0, 0, 0, 40)
+            R.accentLine.BackgroundColor3 = WHITE
+            grad(R.accentLine, Color3.fromRGB(160, 120, 255), Color3.fromRGB(80, 200, 255), 0)
+        end)
+
+        step("tabs", function()
+            local tb = R.tabBar
+            tb.Position = UDim2.new(0, 10, 0, 52)
+            tb.Size = UDim2.new(0, 84, 1, -64)
+            local ll = Instance.new("UIListLayout")
+            ll.Padding = UDim.new(0, 8)
+            ll.SortOrder = Enum.SortOrder.LayoutOrder
+            ll.Parent = tb
+            for i, b in ipairs({R.tabLock, R.tabNoStun, R.tabDash, R.tabList}) do
+                b.LayoutOrder = i
+                b.Size = UDim2.new(1, 0, 0, 38)
+                btn(b, 12)
+            end
+            local sep = Instance.new("Frame")
+            sep.BackgroundColor3 = C_LINE
+            sep.BorderSizePixel = 0
+            sep.Position = UDim2.new(0, 102, 0, 52)
+            sep.Size = UDim2.new(0, 1, 1, -64)
+            sep.ZIndex = 1
+            sep.Parent = R.menuFrame
+        end)
+
+        -- ===== PAGINA LOCK =====
+        step("lock", function()
+            local P, cur = R.lockPage, {y = 0}
+            header(P, cur, "BOTON FLOTANTE")
+            local t = card(P, cur, 2)
+            half(R.showBtn, false, rowY(t, 1)); btn(R.showBtn, 11)
+            half(R.dragBtn, true, rowY(t, 1)); btn(R.dragBtn, 11)
+            lab(R.sizeLabel, 2, rowY(t, 2), 12)
+            col(R.sizeMinus, 2, rowY(t, 2)); btn(R.sizeMinus, 18)
+            col(R.sizePlus, 1, rowY(t, 2)); btn(R.sizePlus, 18)
+
+            header(P, cur, "PREDICT")
+            t = card(P, cur, 1)
+            lab(R.predictLabel, 3, rowY(t, 1), 11)
+            col(R.predictMinus, 3, rowY(t, 1)); btn(R.predictMinus, 10)
+            col(R.predictPlus, 2, rowY(t, 1)); btn(R.predictPlus, 10)
+            col(R.predictToggle, 1, rowY(t, 1)); btn(R.predictToggle, 11)
+
+            local a = R.aimSep -- se reutiliza como encabezado de seccion
+            a.Text = "APUNTADO / TECLA"
+            a.Font = FB
+            a.TextSize = 11
+            a.TextColor3 = C_ACC
+            a.TextXAlignment = Enum.TextXAlignment.Left
+            a.Position = UDim2.new(0, 6, 0, cur.y)
+            a.Size = UDim2.new(1, -12, 0, 14)
+            a.ZIndex = 2
+            cur.y = cur.y + 18
+            t = card(P, cur, 3)
+            half(R.dist3DBtn, false, rowY(t, 1)); btn(R.dist3DBtn, 11)
+            half(R.partBtn, true, rowY(t, 1)); btn(R.partBtn, 11)
+            half(R.keyBtn, false, rowY(t, 2)); btn(R.keyBtn, 11)
+            half(R.modeBtn, true, rowY(t, 2)); btn(R.modeBtn, 11)
+            half(R.aboveBtn, false, rowY(t, 3)); btn(R.aboveBtn, 11)
+            half(R.aboveHeightBtn, true, rowY(t, 3)); btn(R.aboveHeightBtn, 11)
+
+            header(P, cur, "MENU")
+            t = card(P, cur, 1)
+            full(R.transBtn, rowY(t, 1)); btn(R.transBtn, 11)
+            H[P] = cur.y - 8
+        end)
+
+        -- ===== PAGINA STUN =====
+        step("stun", function()
+            local P, cur = R.noStunPage, {y = 0}
+            header(P, cur, "ANTI-STUN")
+            local t = card(P, cur, 1)
+            full(R.nsToggleBtn, rowY(t, 1)); btn(R.nsToggleBtn, 12)
+
+            header(P, cur, "SALTO Y DASH")
+            t = card(P, cur, 2)
+            lab(R.nsJumpLabel, 3, rowY(t, 1), 12)
+            col(R.nsJumpMinus, 3, rowY(t, 1)); btn(R.nsJumpMinus, 18)
+            col(R.nsJumpPlus, 2, rowY(t, 1)); btn(R.nsJumpPlus, 18)
+            col(R.nsJumpGenBtn, 1, rowY(t, 1)); btn(R.nsJumpGenBtn, 10)
+            lab(R.nsDashLabel, 3, rowY(t, 2), 12)
+            col(R.nsDashMinus, 3, rowY(t, 2)); btn(R.nsDashMinus, 18)
+            col(R.nsDashPlus, 2, rowY(t, 2)); btn(R.nsDashPlus, 18)
+            col(R.nsDashGenBtn, 1, rowY(t, 2)); btn(R.nsDashGenBtn, 10)
+
+            header(P, cur, "TAMANO DE BOTONES")
+            t = card(P, cur, 2)
+            lab(R.nsJumpSizeLabel, 2, rowY(t, 1), 12)
+            col(R.nsJumpSizeMinus, 2, rowY(t, 1)); btn(R.nsJumpSizeMinus, 18)
+            col(R.nsJumpSizePlus, 1, rowY(t, 1)); btn(R.nsJumpSizePlus, 18)
+            lab(R.nsDashSizeLabel, 2, rowY(t, 2), 12)
+            col(R.nsDashSizeMinus, 2, rowY(t, 2)); btn(R.nsDashSizeMinus, 18)
+            col(R.nsDashSizePlus, 1, rowY(t, 2)); btn(R.nsDashSizePlus, 18)
+
+            header(P, cur, "BOTONES FLOTANTES")
+            t = card(P, cur, 1)
+            full(R.nsLockBtn, rowY(t, 1)); btn(R.nsLockBtn, 12)
+
+            local i = R.nsInfoLabel
+            i.Position = UDim2.new(0, 6, 0, cur.y - 8)
+            i.Size = UDim2.new(1, -12, 0, 30)
+            i.TextSize = 10
+            i.TextWrapped = true
+            i.TextYAlignment = Enum.TextYAlignment.Top
+            i.ZIndex = 2
+            H[P] = cur.y + 28
+        end)
+
+        -- ===== PAGINA DASH (incluye el boton de Dash Assist, que vive en un do-block) =====
+        step("dash", function()
+            local P, cur = R.dashPage, {y = 0}
+            local assistB, gearB
+            for _, c in ipairs(P:GetChildren()) do
+                if c:IsA("TextButton") then
+                    if math.abs(c.Size.X.Scale - 0.75) < 0.01 then assistB = c
+                    elseif math.abs(c.Size.X.Scale - 0.23) < 0.01 then gearB = c end
+                end
+            end
+            local d = R.dashTitle
+            d.Position = UDim2.new(0, 6, 0, 0)
+            d.Size = UDim2.new(1, -12, 0, 22)
+            d.TextSize = 16
+            d.ZIndex = 2
+            cur.y = 30
+
+            header(P, cur, "MULTIPLICADOR")
+            local t = card(P, cur, 2)
+            local v = R.dashValueLabel
+            v.Position = UDim2.new(0, 10, 0, rowY(t, 1))
+            v.Size = UDim2.new(1, -20, 0, RH)
+            v.TextSize = 13
+            v.ZIndex = 2
+            half(R.dashMinusBtn, false, rowY(t, 2)); btn(R.dashMinusBtn, 18)
+            half(R.dashPlusBtn, true, rowY(t, 2)); btn(R.dashPlusBtn, 18)
+
+            header(P, cur, "ESTADO")
+            t = card(P, cur, 2)
+            full(R.dashToggleBtn, rowY(t, 1)); btn(R.dashToggleBtn, 12)
+            full(R.instantDashBtn, rowY(t, 2)); btn(R.instantDashBtn, 12)
+
+            header(P, cur, "DASH ASSIST")
+            t = card(P, cur, 1)
+            if assistB then
+                assistB.Position = UDim2.new(0, 8, 0, rowY(t, 1))
+                assistB.Size = UDim2.new(1, -68, 0, RH)
+                btn(assistB, 12)
+            end
+            if gearB then
+                gearB.Position = UDim2.new(1, -52, 0, rowY(t, 1))
+                gearB.Size = UDim2.new(0, 44, 0, RH)
+                btn(gearB, 16)
+            end
+
+            local ds = R.dashDesc
+            ds.Position = UDim2.new(0, 6, 0, cur.y - 8)
+            ds.Size = UDim2.new(1, -12, 0, 56)
+            ds.TextSize = 11
+            ds.TextYAlignment = Enum.TextYAlignment.Top
+            ds.ZIndex = 2
+            H[P] = cur.y + 56
+        end)
+
+        -- ===== PAGINA LISTA =====
+        step("list", function()
+            local P, cur = R.listPage, {y = 0}
+            header(P, cur, "LISTAS")
+            local t = card(P, cur, 1)
+            half(R.wlBtn, false, rowY(t, 1)); btn(R.wlBtn, 11)
+            half(R.blBtn, true, rowY(t, 1)); btn(R.blBtn, 11)
+            local h = R.listHint
+            h.Position = UDim2.new(0, 6, 0, cur.y - 8)
+            h.Size = UDim2.new(1, -12, 0, 34)
+            h.TextSize = 10
+            h.ZIndex = 2
+            cur.y = cur.y + 34
+
+            header(P, cur, "IMAN / LUNGE")
+            t = card(P, cur, 2)
+            half(R.imanBtn, false, rowY(t, 1)); btn(R.imanBtn, 11)
+            half(R.lungeBtn, true, rowY(t, 1)); btn(R.lungeBtn, 11)
+            full(R.fuerzaBtn, rowY(t, 2)); btn(R.fuerzaBtn, 11)
+            H[P] = cur.y - 8
+        end)
+
+        -- ===== AREA CON SCROLL (las paginas ahora tienen espacio de sobra) =====
+        step("scroll", function()
+            local sc = Instance.new("ScrollingFrame")
+            sc.Name = "ZeidopSkinScroll"
+            sc.BackgroundTransparency = 1
+            sc.BorderSizePixel = 0
+            sc.Position = UDim2.new(0, 108, 0, 52)
+            sc.Size = UDim2.new(1, -118, 1, -64)
+            sc.ScrollBarThickness = 4
+            sc.ScrollBarImageColor3 = C_ACC
+            sc.ScrollingDirection = Enum.ScrollingDirection.Y
+            sc.VerticalScrollBarInset = Enum.ScrollBarInset.Always
+            sc.CanvasSize = UDim2.new(0, 0, 0, H[R.lockPage] or 420)
+            sc.Parent = R.menuFrame
+            local pages = {R.lockPage, R.noStunPage, R.dashPage, R.listPage}
+            local tabsB = {R.tabLock, R.tabNoStun, R.tabDash, R.tabList}
+            for i, p in ipairs(pages) do
+                p.Parent = sc
+                p.Position = UDim2.new(0, 0, 0, 0)
+                p.Size = UDim2.new(1, 0, 0, H[p] or 420)
+                tabsB[i].MouseButton1Click:Connect(function()
+                    sc.CanvasPosition = Vector2.new(0, 0)
+                    sc.CanvasSize = UDim2.new(0, 0, 0, H[p] or 420)
+                end)
+            end
+        end)
+
+        -- ===== VENTANAS EMERGENTES (selector de jugadores y config de Dash Assist) =====
+        step("popups", function()
+            local pk = R.pickerGui
+            pk.Size = UDim2.new(0, 230, 0, 270)
+            pk.Position = UDim2.new(0.5, -115, 0.5, -135)
+            corner(pk, 12)
+            R.pickerStroke.Thickness = 2
+            R.pickerTitle.TextSize = 13
+            R.pickerClose.Size = UDim2.new(0, 26, 0, 26)
+            R.pickerClose.Position = UDim2.new(1, -32, 0, 4)
+            R.pickerLayout.Padding = UDim.new(0, 6)
+            local ps = pk:FindFirstChildOfClass("ScrollingFrame")
+            if ps then
+                ps.ScrollBarImageColor3 = C_ACC
+                ps.Position = UDim2.new(0, 8, 0, 36)
+                ps.Size = UDim2.new(1, -16, 1, -44)
+            end
+
+            local asg = R.screenGui:FindFirstChild("AssistSettings")
+            if asg then
+                asg.Size = UDim2.new(0, 220, 0, 270)
+                asg.Position = UDim2.new(0.5, -110, 0.5, -135)
+                corner(asg, 12)
+                local sc2 = asg:FindFirstChildOfClass("ScrollingFrame")
+                if sc2 then
+                    sc2.CanvasSize = UDim2.new(0, 0, 0, 280)
+                    sc2.ScrollBarImageColor3 = C_ACC
+                    local lay = sc2:FindFirstChildOfClass("UIListLayout")
+                    if lay then lay.Padding = UDim.new(0, 12) end
+                    for _, row in ipairs(sc2:GetChildren()) do
+                        if row:IsA("Frame") then
+                            row.Size = UDim2.new(1, -6, 0, 28)
+                            for _, c in ipairs(row:GetChildren()) do
+                                if c:IsA("TextLabel") then c.TextSize = 11 end
+                                if c:IsA("TextButton") then c.TextSize = 14 end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        -- ===== BOTONES FLOTANTES (solo apariencia; tamano y posicion siguen siendo tuyos) =====
+        step("float", function()
+            for _, b in ipairs({R.lockButton, R.jumpBtn, R.dashFloatBtn}) do
+                b.Font = Enum.Font.GothamBlack
+                grad(b, WHITE, Color3.fromRGB(200, 200, 200), 90)
+            end
+            for _, s in ipairs({R.lockStroke, R.jbStroke, R.dfStroke}) do
+                s.Color = WHITE
+                s.Transparency = 0.55
+                s.Thickness = 2
+            end
+        end)
+    end)
+    if not ok then warn("[zeidop skin] " .. tostring(err)) end
 end
